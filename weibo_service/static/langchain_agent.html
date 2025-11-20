@@ -1,0 +1,932 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>微博行动官 · LangChain Agent 控制台</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: "SF Pro Display", "PingFang SC", "Microsoft YaHei", system-ui,
+          -apple-system, BlinkMacSystemFont, sans-serif;
+        --bg: #f7f7fb;
+        --card: #ffffff;
+        --border: #e0e3ec;
+        --primary: #5b67f1;
+        --primary-dark: #404ae0;
+        --text: #1f2430;
+        --muted: #5b6171;
+        --shadow: 0 12px 40px rgba(15, 23, 42, 0.08);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+      }
+
+      .app {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 32px 20px 64px;
+      }
+
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 20px;
+        padding-bottom: 24px;
+      }
+
+      header h1 {
+        margin: 0 0 8px;
+        font-size: 28px;
+      }
+
+      header p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 15px;
+      }
+
+      .status-badge {
+        padding: 6px 12px;
+        border-radius: 999px;
+        font-size: 14px;
+        font-weight: 600;
+        background: #f0f1fb;
+        color: var(--muted);
+      }
+
+      .status-panel {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 6px;
+      }
+
+      .status-detail {
+        font-size: 13px;
+        color: var(--muted);
+      }
+
+      .status-badge.ready {
+        background: rgba(91, 103, 241, 0.15);
+        color: var(--primary-dark);
+      }
+
+      .content {
+        display: grid;
+        grid-template-columns: 320px 1fr;
+        gap: 24px;
+      }
+
+      .panel {
+        background: var(--card);
+        border-radius: 20px;
+        padding: 24px;
+        border: 1px solid var(--border);
+        box-shadow: var(--shadow);
+      }
+
+      .panel h2,
+      .panel h3 {
+        margin-top: 0;
+        margin-bottom: 12px;
+      }
+
+      .panel h3 {
+        font-size: 16px;
+        color: var(--muted);
+      }
+
+      label {
+        display: block;
+        margin-bottom: 12px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+
+      label span {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--muted);
+        font-weight: 500;
+      }
+
+      input,
+      textarea,
+      select {
+        width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 10px 12px;
+        font-size: 15px;
+        background: #fff;
+      }
+
+      textarea {
+        resize: none;
+        min-height: 90px;
+      }
+
+      button {
+        cursor: pointer;
+        border-radius: 999px;
+        border: none;
+        padding: 12px 24px;
+        font-size: 15px;
+        font-weight: 600;
+        transition: all 0.2s ease;
+      }
+
+      button.primary {
+        background: var(--primary);
+        color: #fff;
+      }
+
+      button.primary:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      button.primary:not(:disabled):hover {
+        background: var(--primary-dark);
+      }
+
+      button.secondary {
+        background: transparent;
+        color: var(--primary-dark);
+        border: 1px solid rgba(91, 103, 241, 0.4);
+      }
+
+      .chat-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+        min-height: 700px;
+      }
+
+      .chat-history {
+        flex: 1;
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 16px;
+        overflow-y: auto;
+        background: #fafbff;
+      }
+
+      .message {
+        max-width: 75%;
+        padding: 12px 16px;
+        border-radius: 16px;
+        margin-bottom: 12px;
+        line-height: 1.5;
+        box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+      }
+
+      .message.user {
+        margin-left: auto;
+        background: #e8ecff;
+      }
+
+      .message.assistant {
+        background: #fff;
+        border: 1px solid var(--border);
+      }
+
+      .message .content {
+        white-space: pre-wrap;
+      }
+
+      .message.assistant.streaming .content {
+        min-height: 20px;
+      }
+
+      .cursor {
+        display: inline-block;
+        width: 6px;
+        height: 1.2em;
+        background: var(--primary);
+        margin-left: 4px;
+        animation: cursor-blink 1.2s steps(1) infinite;
+        vertical-align: middle;
+      }
+
+      @keyframes cursor-blink {
+        50% {
+          opacity: 0;
+        }
+      }
+
+      .message .role {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+
+      .tool-log {
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 16px;
+        background: #fafbff;
+        max-height: 250px;
+        overflow-y: auto;
+      }
+
+      .tool-entry {
+        border-left: 3px solid var(--primary);
+        padding-left: 12px;
+        margin-bottom: 14px;
+      }
+
+      .tool-entry.running {
+        border-left-color: #ffbf47;
+      }
+
+      .tool-entry.error {
+        border-left-color: #ff6b6b;
+      }
+
+      .tool-entry h4 {
+        margin: 0 0 6px;
+        font-size: 15px;
+        color: var(--primary-dark);
+      }
+
+      .tool-entry p {
+        margin: 4px 0;
+        font-size: 14px;
+        color: var(--muted);
+        word-break: break-all;
+      }
+
+      .status-chip {
+        display: inline-block;
+        border-radius: 999px;
+        font-size: 12px;
+        padding: 2px 10px;
+        margin-bottom: 8px;
+        background: rgba(91, 103, 241, 0.15);
+        color: var(--primary-dark);
+      }
+
+      .status-chip.running {
+        background: rgba(255, 191, 71, 0.2);
+        color: #8c5200;
+      }
+
+      .status-chip.error {
+        background: rgba(255, 107, 107, 0.2);
+        color: #c0392b;
+      }
+
+      .empty-state {
+        text-align: center;
+        color: var(--muted);
+        font-size: 14px;
+        padding: 24px 0;
+      }
+
+      ul.account-list {
+        padding-left: 18px;
+        margin: 0 0 20px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .tips {
+        font-size: 14px;
+        line-height: 1.6;
+        color: var(--muted);
+      }
+
+      .actions {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-top: 12px;
+      }
+
+      .toggle-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 4px 0 12px;
+        font-size: 14px;
+        color: var(--muted);
+      }
+
+      .toggle-row input {
+        width: auto;
+        margin: 0;
+      }
+
+      @media (max-width: 980px) {
+        .content {
+          grid-template-columns: 1fr;
+        }
+
+        .panel {
+          border-radius: 16px;
+        }
+
+        .message {
+          max-width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <header>
+        <div>
+          <h1>微博行动官 · LangChain Agent 控制台</h1>
+          <p>配置 LLM 接入信息，实时观察工具调用轨迹，指挥微博账号完成发帖、评论、取数等任务。</p>
+        </div>
+        <div class="status-panel">
+          <div class="status-badge" id="status-indicator">未连接</div>
+          <div class="status-detail" id="status-detail">等待连接</div>
+        </div>
+      </header>
+
+      <div class="content">
+        <section class="panel">
+          <h2>连接设置</h2>
+          <form id="session-form">
+            <label>
+              <span>API Key <small style="font-weight:400;color:var(--muted)">(可选，留空读取环境变量)</small></span>
+              <input
+                type="password"
+                id="api-key"
+                placeholder="可留空，默认读取 YUNWU_API_KEY"
+              />
+            </label>
+            <label>
+              <span>Base URL <small style="font-weight:400;color:var(--muted)">(可选)</small></span>
+              <input
+                type="text"
+                id="base-url"
+                placeholder="https://your-openai-compatible-endpoint/v1（可留空）"
+              />
+            </label>
+            <label>
+              <span>模型</span>
+              <input type="text" id="model" value="gpt-4o-mini" />
+            </label>
+            <label>
+              <span>Temperature</span>
+              <input type="number" id="temperature" min="0" max="2" step="0.1" value="0.2" />
+            </label>
+            <label>
+              <span>LLM 超时（秒）</span>
+              <input type="number" id="llm-timeout" min="60" max="900" step="30" value="600" />
+            </label>
+            <label>
+              <span>工具调用超时（秒）</span>
+              <input type="number" id="tool-timeout" min="60" max="900" step="30" value="600" />
+            </label>
+            <div class="toggle-row">
+              <input type="checkbox" id="streaming-toggle" checked />
+              <span>启用流式输出（展示实时思考 / 执行状态）</span>
+            </div>
+            <button class="primary" type="submit" id="connect-btn">连接智能体</button>
+          </form>
+
+          <div>
+            <h3>可用账号</h3>
+            <ul class="account-list" id="account-list"></ul>
+          </div>
+
+          <div class="tips">
+            <p>提示：</p>
+            <p>· 首条指令中请标明使用的账号 ID，例如“账号 7828522614 查看热门”。</p>
+            <p>· 若任务步骤复杂，可让智能体自行规划，它会按需调用 weibo_action / weibo_get_state 等工具。</p>
+            <p>· 右侧可回顾工具调用与返回，快速定位异常。</p>
+          </div>
+        </section>
+
+        <section class="panel chat-panel">
+          <div class="chat-history" id="chat-history">
+            <div class="empty-state">请先连接智能体，然后在这里开始对话。</div>
+          </div>
+
+          <form id="message-form">
+            <label>
+              <span>输入指令</span>
+              <textarea id="message-input" placeholder="示例：账号 7828522614 发微博 分享一篇关于 AI 安全的科普长文"></textarea>
+            </label>
+            <div class="actions">
+              <button class="primary" type="submit" id="send-btn" disabled>发送</button>
+              <button class="secondary" type="button" id="reset-btn" disabled>清空上下文</button>
+            </div>
+          </form>
+
+          <div class="tool-log" id="tool-logs">
+            <div class="empty-state">暂无工具调用</div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <script>
+      const STATUS_MAP = {
+        idle: { label: "已连接", detail: "待命" },
+        thinking: { label: "思考中", detail: "🧠 智能体正在规划动作" },
+        thought_complete: { label: "准备执行", detail: "🧠 完成思考，准备调用工具" },
+        executing: { label: "执行中", detail: "⚙️ 调用工具中" },
+        finalizing: { label: "整理回复", detail: "📝 汇总执行结果" },
+      };
+
+      const state = {
+        sessionId: null,
+        accounts: [],
+        sending: false,
+        streamingEnabled: true,
+        toolLogs: [],
+        streamContext: {
+          bubble: null,
+          cursor: null,
+          text: "",
+        },
+      };
+
+      const toolLogMap = new Map();
+
+      const refs = {
+        statusBadge: document.getElementById("status-indicator"),
+        statusDetail: document.getElementById("status-detail"),
+        accountList: document.getElementById("account-list"),
+        connectBtn: document.getElementById("connect-btn"),
+        sendBtn: document.getElementById("send-btn"),
+        resetBtn: document.getElementById("reset-btn"),
+        chatHistory: document.getElementById("chat-history"),
+        toolLogs: document.getElementById("tool-logs"),
+        messageInput: document.getElementById("message-input"),
+        streamingToggle: document.getElementById("streaming-toggle"),
+        apiKey: document.getElementById("api-key"),
+        baseUrl: document.getElementById("base-url"),
+        model: document.getElementById("model"),
+        temperature: document.getElementById("temperature"),
+        llmTimeout: document.getElementById("llm-timeout"),
+        toolTimeout: document.getElementById("tool-timeout"),
+      };
+
+      function setStatus(label, ready = false, detail = "") {
+        refs.statusBadge.textContent = label;
+        refs.statusBadge.classList.toggle("ready", ready);
+        refs.statusDetail.textContent = detail || "";
+      }
+
+      function updateStatusByState(stateKey, extra = {}) {
+        const preset = STATUS_MAP[stateKey] || STATUS_MAP.idle;
+        let detail = preset.detail;
+        if (stateKey === "executing" && extra.tool) {
+          detail = `⚙️ 调用 ${extra.tool}`;
+        }
+        setStatus(preset.label, true, detail);
+      }
+
+      function clearEmptyState() {
+        const empty = refs.chatHistory.querySelector(".empty-state");
+        if (empty) empty.remove();
+      }
+
+      function createBubbleElement(role, content) {
+        const bubble = document.createElement("div");
+        bubble.className = `message ${role === "user" ? "user" : "assistant"}`;
+        const roleNode = document.createElement("div");
+        roleNode.className = "role";
+        roleNode.textContent = role === "user" ? "用户" : "微博行动官";
+        const contentNode = document.createElement("div");
+        contentNode.className = "content";
+        contentNode.textContent = content ?? "";
+        bubble.append(roleNode, contentNode);
+        return bubble;
+      }
+
+      function resetStreamContext() {
+        const { cursor } = state.streamContext;
+        if (cursor && cursor.parentNode) {
+          cursor.remove();
+        }
+        state.streamContext = { bubble: null, cursor: null, text: "" };
+      }
+
+      function renderHistory(history) {
+        if (!history.length) {
+          refs.chatHistory.innerHTML = '<div class="empty-state">尚无对话。</div>';
+          resetStreamContext();
+          return;
+        }
+        refs.chatHistory.innerHTML = "";
+        history.forEach((msg) => {
+          const bubble = createBubbleElement(msg.role, msg.content || "");
+          refs.chatHistory.appendChild(bubble);
+        });
+        refs.chatHistory.scrollTop = refs.chatHistory.scrollHeight;
+        resetStreamContext();
+      }
+
+      function renderAccountList() {
+        if (!state.accounts.length) {
+          refs.accountList.innerHTML = "<li>无可用账号</li>";
+          return;
+        }
+        refs.accountList.innerHTML = state.accounts
+          .map((acct) => `<li>账号 ID：${acct.account_id}</li>`)
+          .join("");
+      }
+
+      function createParagraph(label, value) {
+        const p = document.createElement("p");
+        const strong = document.createElement("strong");
+        strong.textContent = `${label}：`;
+        const span = document.createElement("span");
+        span.textContent = value || "无";
+        p.append(strong, span);
+        return p;
+      }
+
+      function renderToolLogs() {
+        if (!state.toolLogs.length) {
+          refs.toolLogs.innerHTML = '<div class="empty-state">暂无工具调用</div>';
+          return;
+        }
+        refs.toolLogs.innerHTML = "";
+        state.toolLogs.forEach((entry, index) => {
+          const block = document.createElement("div");
+          block.className = `tool-entry ${entry.status || "done"}`;
+          const title = document.createElement("h4");
+          title.textContent = `${index + 1}. ${entry.tool || "工具调用"}`;
+          const chip = document.createElement("span");
+          chip.className = `status-chip ${entry.status || "done"}`;
+          chip.textContent =
+            entry.status === "running"
+              ? "执行中"
+              : entry.status === "error"
+              ? "失败"
+              : "完成";
+          block.append(title, chip);
+          block.appendChild(createParagraph("入参", entry.input || ""));
+          if (entry.log) {
+            block.appendChild(createParagraph("日志", entry.log));
+          }
+          if (entry.output) {
+            block.appendChild(
+              createParagraph(entry.status === "error" ? "异常" : "返回", entry.output)
+            );
+          }
+          refs.toolLogs.appendChild(block);
+        });
+      }
+
+      function resetToolLogs() {
+        state.toolLogs = [];
+        toolLogMap.clear();
+        renderToolLogs();
+      }
+
+      function appendUserMessage(content) {
+        clearEmptyState();
+        const bubble = createBubbleElement("user", content);
+        refs.chatHistory.appendChild(bubble);
+        refs.chatHistory.scrollTop = refs.chatHistory.scrollHeight;
+      }
+
+      function startAssistantStream() {
+        clearEmptyState();
+        const bubble = createBubbleElement("assistant", "");
+        bubble.classList.add("streaming");
+        const cursor = document.createElement("span");
+        cursor.className = "cursor";
+        const contentNode = bubble.querySelector(".content");
+        contentNode.textContent = "";
+        contentNode.appendChild(cursor);
+        state.streamContext = { bubble, cursor, text: "" };
+        refs.chatHistory.appendChild(bubble);
+        refs.chatHistory.scrollTop = refs.chatHistory.scrollHeight;
+      }
+
+      function appendAssistantToken(token) {
+        const { bubble, cursor } = state.streamContext;
+        if (!bubble || !cursor) return;
+        state.streamContext.text += token;
+        const contentNode = bubble.querySelector(".content");
+        if (cursor.parentNode) {
+          cursor.remove();
+        }
+        contentNode.textContent = state.streamContext.text;
+        contentNode.appendChild(cursor);
+        refs.chatHistory.scrollTop = refs.chatHistory.scrollHeight;
+      }
+
+      function finishAssistantStream(finalText) {
+        const { bubble, cursor, text } = state.streamContext;
+        if (!bubble) return;
+        if (cursor && cursor.parentNode) {
+          cursor.remove();
+        }
+        const contentNode = bubble.querySelector(".content");
+        contentNode.textContent = typeof finalText === "string" ? finalText : text;
+        bubble.classList.remove("streaming");
+        resetStreamContext();
+      }
+
+      function handleToolStart(payload) {
+        const entry = {
+          id: payload.id,
+          tool: payload.tool || "工具调用",
+          input: payload.input || "",
+          status: "running",
+          output: "",
+          log: "",
+        };
+        toolLogMap.set(entry.id, entry);
+        state.toolLogs.push(entry);
+        renderToolLogs();
+      }
+
+      function handleToolResult(payload) {
+        const entry = toolLogMap.get(payload.id);
+        if (!entry) return;
+        entry.status = payload.error ? "error" : "done";
+        entry.output = payload.error || payload.output || "";
+        renderToolLogs();
+      }
+
+      function replaceToolLogsFromSteps(steps) {
+        toolLogMap.clear();
+        if (!steps || !steps.length) {
+          state.toolLogs = [];
+          renderToolLogs();
+          return;
+        }
+        state.toolLogs = steps.map((step, index) => {
+          const entry = {
+            id: `step-${index}`,
+            tool: step.tool || `步骤 ${index + 1}`,
+            input: step.input || "",
+            log: step.log || "",
+            output: step.observation || "",
+            status: "done",
+          };
+          toolLogMap.set(entry.id, entry);
+          return entry;
+        });
+        renderToolLogs();
+      }
+
+      function handleFinalEvent(payload) {
+        finishAssistantStream(payload.output || "");
+        renderHistory(payload.history || []);
+        replaceToolLogsFromSteps(payload.steps || []);
+        setStatus("已连接", true, "待命");
+        state.sending = false;
+        refs.sendBtn.disabled = false;
+        refs.resetBtn.disabled = false;
+      }
+
+      function handleStreamError(message) {
+        finishAssistantStream("");
+        setStatus("执行失败", false, message || "请查看后端日志");
+        state.sending = false;
+        refs.sendBtn.disabled = false;
+        refs.resetBtn.disabled = false;
+        alert(`执行失败：${message}`);
+      }
+
+      function handleStatusEvent(payload) {
+        if (!payload || !payload.state) return;
+        updateStatusByState(payload.state, payload);
+      }
+
+      function handleStreamEvent(event) {
+        if (!event || !event.type) return;
+        switch (event.type) {
+          case "status":
+            handleStatusEvent(event.payload);
+            break;
+          case "token":
+            appendAssistantToken(event.payload?.content || "");
+            break;
+          case "tool_start":
+            handleToolStart(event.payload || {});
+            break;
+          case "tool_result":
+            handleToolResult(event.payload || {});
+            break;
+          case "final":
+            handleFinalEvent(event.payload || {});
+            break;
+          case "error":
+            handleStreamError(event.payload?.message || "未知错误");
+            break;
+          default:
+            break;
+        }
+      }
+
+      async function streamChatRequest(message) {
+        updateStatusByState("thinking");
+        const res = await fetch("/api/chat/stream", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: state.sessionId,
+            message,
+          }),
+        });
+        if (!res.ok) {
+          throw new Error(await res.text());
+        }
+        const reader = res.body?.getReader();
+        if (!reader) {
+          throw new Error("浏览器不支持流式读取");
+        }
+        const decoder = new TextDecoder("utf-8");
+        let buffer = "";
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          let newlineIndex;
+          while ((newlineIndex = buffer.indexOf("\n")) >= 0) {
+            const line = buffer.slice(0, newlineIndex).trim();
+            buffer = buffer.slice(newlineIndex + 1);
+            if (!line) continue;
+            try {
+              handleStreamEvent(JSON.parse(line));
+            } catch (err) {
+              console.error("解析流失败", err, line);
+            }
+          }
+        }
+        buffer += decoder.decode();
+        const remaining = buffer.trim();
+        if (remaining) {
+          try {
+            handleStreamEvent(JSON.parse(remaining));
+          } catch (err) {
+            console.error("解析剩余流失败", err, remaining);
+          }
+        }
+      }
+
+      async function sendWithoutStreaming(message) {
+        try {
+          updateStatusByState("thinking");
+          const res = await fetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              session_id: state.sessionId,
+              message,
+            }),
+          });
+          if (!res.ok) throw new Error(await res.text());
+          const data = await res.json();
+          renderHistory(data.history || []);
+          replaceToolLogsFromSteps(data.steps || []);
+          setStatus("已连接", true, "待命");
+        } catch (err) {
+          console.error(err);
+          setStatus("执行失败", false, "请查看后端日志");
+          alert("执行失败，请查看后端日志或检查工具配置。");
+        } finally {
+          state.sending = false;
+          refs.sendBtn.disabled = false;
+          refs.resetBtn.disabled = false;
+        }
+      }
+
+      async function sendMessage(event) {
+        event.preventDefault();
+        if (!state.sessionId) {
+          alert("请先连接智能体");
+          return;
+        }
+        if (state.sending) return;
+        const content = refs.messageInput.value.trim();
+        if (!content) return;
+        refs.messageInput.value = "";
+        appendUserMessage(content);
+        resetToolLogs();
+        state.sending = true;
+        refs.sendBtn.disabled = true;
+        refs.resetBtn.disabled = true;
+        if (state.streamingEnabled) {
+          startAssistantStream();
+          try {
+            await streamChatRequest(content);
+          } catch (err) {
+            console.error(err);
+            handleStreamError(err.message || "网络异常");
+          }
+        } else {
+          await sendWithoutStreaming(content);
+        }
+      }
+
+      async function fetchConfig() {
+        try {
+          const res = await fetch("/api/config");
+          if (!res.ok) throw new Error("获取配置失败");
+          const data = await res.json();
+          state.accounts = data.accounts || [];
+          renderAccountList();
+          if (data.defaults) {
+            refs.model.value = data.defaults.model;
+            refs.temperature.value = data.defaults.temperature;
+            if (data.defaults.llm_timeout) {
+              refs.llmTimeout.value = data.defaults.llm_timeout;
+            }
+            if (data.defaults.tool_timeout) {
+              refs.toolTimeout.value = data.defaults.tool_timeout;
+            }
+          }
+        } catch (err) {
+          console.error(err);
+        }
+      }
+
+      async function createSession(event) {
+        event.preventDefault();
+        const payload = {
+          api_key: refs.apiKey.value.trim(),
+          base_url: refs.baseUrl.value.trim(),
+          model: refs.model.value.trim() || "gpt-4o-mini",
+          temperature: Number(refs.temperature.value) || 0.2,
+          llm_timeout: Number(refs.llmTimeout.value) || 600,
+          tool_timeout: Number(refs.toolTimeout.value) || 600,
+          streaming: refs.streamingToggle.checked,
+        };
+        refs.connectBtn.disabled = true;
+        setStatus("连接中...", false, "正在初始化 LangChain 智能体");
+        try {
+          const res = await fetch("/api/session", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) throw new Error(await res.text());
+          const data = await res.json();
+          state.sessionId = data.session_id;
+          state.streamingEnabled = data.streaming !== false;
+          renderHistory(data.history || []);
+          resetToolLogs();
+          setStatus(
+            "已连接",
+            true,
+            state.streamingEnabled ? "流式输出已启用" : "当前为标准模式"
+          );
+          refs.sendBtn.disabled = false;
+          refs.resetBtn.disabled = false;
+        } catch (err) {
+          console.error(err);
+          setStatus("连接失败", false, "请检查 API Key / Base URL 配置");
+          alert("创建会话失败，请检查参数或查看后端日志。");
+        } finally {
+          refs.connectBtn.disabled = false;
+        }
+      }
+
+      async function resetSession() {
+        if (!state.sessionId) return;
+        refs.resetBtn.disabled = true;
+        try {
+          const res = await fetch("/api/session/reset", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ session_id: state.sessionId }),
+          });
+          if (!res.ok) throw new Error(await res.text());
+          const data = await res.json();
+          renderHistory(data.history || []);
+          resetToolLogs();
+          setStatus("上下文已清空", true, "可以继续输入新指令");
+        } catch (err) {
+          console.error(err);
+          setStatus("清空失败", false, "请稍后重试");
+          alert("重置失败，请重试。");
+        } finally {
+          refs.resetBtn.disabled = false;
+        }
+      }
+
+      document.getElementById("session-form").addEventListener("submit", createSession);
+      document.getElementById("message-form").addEventListener("submit", sendMessage);
+      document.getElementById("reset-btn").addEventListener("click", resetSession);
+
+      fetchConfig();
+      setStatus("未连接", false, "等待连接");
+    </script>
+  </body>
+</html>

@@ -1,0 +1,93 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+.*.swp
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.lock-wscript
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.pyc
+venv/
+ENV/
+env/
+.venv/
+.Python
+pip-log.txt
+pip-delete-this-directory.txt
+pip-wheel-metadata/
+*.egg-info/
+dist/
+build/
+eggs/
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+
+# Go
+bin/
+pkg/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Java
+target/
+*.class
+
+# Logs and databases
+*.log
+*.sql
+*.sqlite
+*.sqlite3
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+*.cer
+
+# IDEs and editors
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+*.iml
+*.ipr
+*.iws
+
+# Build artifacts
+dist/
+build/
+out/
+coverage/
+
+# Misc
+*.bak
+*.swp
+*.tmp
+.DS_Store
