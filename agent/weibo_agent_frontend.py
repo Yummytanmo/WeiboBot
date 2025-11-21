@@ -155,6 +155,13 @@ class StreamingAgentCallbackHandler(BaseCallbackHandler):
         except Exception:  # noqa: BLE001
             return str(value)
 
+    def on_chain_start(
+        self, serialized: Dict[str, Any], inputs: Dict[str, Any], **kwargs: Any
+    ) -> None:
+        """Run when chain starts."""
+        if isinstance(serialized, dict) and serialized.get("name") == "AgentExecutor":
+            self._emit("log", {"content": "> Entering new AgentExecutor chain...\n"})
+
     def on_llm_start(self, *args: Any, **kwargs: Any) -> None:  # noqa: ANN401
         self._emit("status", {"state": "thinking"})
 
@@ -178,6 +185,10 @@ class StreamingAgentCallbackHandler(BaseCallbackHandler):
             tool_name = serialized.get("name") or serialized.get("tool") or ""
         elif isinstance(serialized, list) and serialized:
             tool_name = str(serialized[-1])
+        
+        log_content = f"\nInvoking: `{tool_name}` with `{input_str}`\n"
+        self._emit("log", {"content": log_content})
+        
         payload = {
             "id": str(run_id),
             "tool": tool_name,
@@ -193,10 +204,14 @@ class StreamingAgentCallbackHandler(BaseCallbackHandler):
         parent_run_id: Any = None,  # noqa: ANN401
         **kwargs: Any,
     ) -> None:
+        output_str = self._stringify(output)
+        log_content = f"\n{output_str}\n"
+        self._emit("log", {"content": log_content})
+
         payload = {
             "id": str(run_id),
             "tool": kwargs.get("name") or "",
-            "output": self._stringify(output),
+            "output": output_str,
         }
         self._emit("tool_result", payload)
 

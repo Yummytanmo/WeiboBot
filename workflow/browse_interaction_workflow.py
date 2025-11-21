@@ -19,9 +19,11 @@ if __package__ in (None, ""):
         WeiboServiceToolkit,
     )
     from weibo_service.accounts import account_list  # type: ignore  # noqa: E402
+    from workflow.workflow_base import BaseWorkflow, WorkflowContext  # noqa: E402
 else:
     from agent.weibo_tools import WeiboActionTool, WeiboGetStateTool, WeiboServiceToolkit
     from weibo_service.accounts import account_list  # type: ignore
+    from workflow.workflow_base import BaseWorkflow, WorkflowContext
 
 
 PERSONA = "职业：科技/AI 领域博主；风格：理性、专业、乐观；语气：简洁、有观点、有行动号召。"
@@ -117,6 +119,113 @@ def _decide_interactions(
         }
     )
     return result.decisions
+
+
+class BrowseInteractionWorkflow(BaseWorkflow):
+    """
+    浏览互动Workflow（可组合版本）
+    
+    从WorkflowContext中读取配置，浏览微博流并执行互动决策
+    """
+    
+    def __init__(
+        self,
+        n_following: int = 5,
+        n_recommend: int = 5,
+        max_actions: int = 5,
+        **kwargs,
+    ):
+        """
+        初始化浏览互动workflow
+        
+        Args:
+            n_following: 获取关注数量
+            n_recommend: 获取推荐数量
+            max_actions: 最大互动次数
+        """
+        super().__init__(name="BrowseInteraction", **kwargs)
+        self.n_following = n_following
+        self.n_recommend = n_recommend
+        self.max_actions = max_actions
+    
+    def _execute(self, context: WorkflowContext) -> WorkflowContext:
+        """
+        执行浏览和互动
+        
+        Args:
+            context: workflow上下文
+            
+        Returns:
+            更新后的context（包含interactions列表）
+        """
+        # 初始化 LLM 和工具
+        print(">>> 初始化 LLM 和工具...")
+        llm = _build_llm(model=context.llm_model, temperature=context.llm_temperature)
+        toolkit = WeiboServiceToolkit(account_list, timeout=context.tool_timeout)
+        state_tool = WeiboGetStateTool(toolkit.base_url, toolkit.timeout)
+        action_tool = WeiboActionTool(toolkit.base_url, toolkit.timeout)
+        
+        # 拉取微博流
+        print(f">>> 拉取微博流（关注 {self.n_following} 条，推荐 {self.n_recommend} 条）...")
+        raw_state = state_tool.invoke(
+            {
+                "agent_id": context.agent_id,
+                "n_following": self.n_following,
+                "n_recommend": self.n_recommend,
+            }
+        )
+        feed_data = json.loads(raw_state)
+        object_map = _collect_object_map(feed_data)
+        
+        # 生成热点摘要
+        print(">>> 生成热点摘要...")
+        feed_summary = _summarize_feed(llm, feed_data)
+        print(f"摘要: {feed_summary}")
+        
+        # 生成互动决策
+        print("\n>>> 生成互动决策...")
+        decisions = _decide_interactions(llm, feed_data, PERSONA, max_actions=self.max_actions)
+        print(json.dumps([d.model_dump() for d in decisions], ensure_ascii=False, indent=2))
+        
+        # 执行互动
+        responses: List[Dict[str, Any]] = []
+        executed_count = 0
+        for decision in decisions:
+            if decision.action_type == "skip":
+                continue
+            if executed_count >= self.max_actions:
+                break
+            
+            target_object = decision.target_object
+            if "/" not in target_object:
+                target_object = object_map.get(target_object, target_object)
+            if "/" not in target_object:
+                print(f"跳过 {decision.action_type}，未找到完整目标：{decision.target_object}")
+                continue
+            
+            payload = {
+                "agent_id": context.agent_id,
+                "action_type": decision.action_type,
+                "action_content": decision.action_content,
+                "target_object": target_object,
+            }
+            resp_raw = action_tool.invoke(payload)
+            interaction_data = {
+                "decision": decision.model_dump(),
+                "response": resp_raw,
+            }
+            responses.append(interaction_data)
+            executed_count += 1
+            print(f"已执行 {decision.action_type} -> {target_object}，响应：{resp_raw}")
+        
+        # 更新context
+        updated_context = context.update(
+            state_data=feed_data,
+        )
+        for interaction in responses:
+            updated_context = updated_context.add_interaction(interaction)
+        
+        return updated_context
 
 
 def run_browse_interaction_workflow(

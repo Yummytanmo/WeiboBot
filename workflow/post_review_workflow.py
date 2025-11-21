@@ -20,9 +20,11 @@ if __package__ in (None, ""):
         WeiboServiceToolkit,
     )
     from weibo_service.accounts import account_list  # type: ignore  # noqa: E402
+    from workflow.workflow_base import BaseWorkflow, WorkflowContext  # noqa: E402
 else:
     from agent.weibo_tools import WeiboActionTool, WeiboFeedbackTool, WeiboServiceToolkit
     from weibo_service.accounts import account_list  # type: ignore
+    from workflow.workflow_base import BaseWorkflow, WorkflowContext
 
 
 PERSONA = "职业：科技/AI 领域博主；风格：理性、专业、乐观；语气：简洁、有观点、有行动号召。"
@@ -104,6 +106,137 @@ def _review_post(
             "content": content,
         }
     )
+
+
+class PostReviewWorkflow(BaseWorkflow):
+    """
+    帖子生成和审查Workflow（可组合版本）
+    
+    从WorkflowContext中读取schedule或直接配置，生成、审查并发布帖子
+    """
+    
+    def __init__(
+        self,
+        topic: Optional[str] = None,
+        notes: Optional[str] = None,
+        feedback_delay: int = 5,
+        max_review_rounds: int = 2,
+        auto_post: bool = True,
+        **kwargs,
+    ):
+        """
+        初始化帖子审查workflow
+        
+        Args:
+            topic: 帖子主题（如为None则从schedule读取）
+            notes: 补充说明
+            feedback_delay: 发帖后等待反馈的延迟（秒）
+            max_review_rounds: 最大审查轮数
+            auto_post: 是否自动发布（False则仅生成不发布）
+        """
+        super().__init__(name="PostReview", **kwargs)
+        self.topic = topic
+        self.notes = notes
+        self.feedback_delay = feedback_delay
+        self.max_review_rounds = max_review_rounds
+        self.auto_post = auto_post
+    
+    def _execute(self, context: WorkflowContext) -> WorkflowContext:
+        """
+        执行帖子生成和审查
+        
+        Args:
+            context: workflow上下文
+            
+        Returns:
+            更新后的context（包含posts列表）
+        """
+        # 初始化 LLM 和工具
+        print(">>> 初始化 LLM 和工具...")
+        llm = _build_llm(model=context.llm_model, temperature=context.llm_temperature)
+        toolkit = WeiboServiceToolkit(account_list, timeout=context.tool_timeout)
+        action_tool = WeiboActionTool(toolkit.base_url, toolkit.timeout)
+        feedback_tool = WeiboFeedbackTool(toolkit.base_url, toolkit.timeout)
+        
+        # 确定主题和热点摘要
+        topic = self.topic
+        trending = context.trending_summary
+        
+        # 如果没有指定topic，尝试从schedule中获取第一个post任务
+        if not topic and context.schedule:
+            schedule_items = context.schedule.get("items", [])
+            for item in schedule_items:
+                if item.get("action") == "post":
+                    topic = item.get("topic", "今日话题")
+                    break
+        
+        if not topic:
+            topic = "今日科技热点"
+        
+        # 生成初稿
+        print(">>> 生成初稿...")
+        draft = _compose_post(llm, topic, self.notes, trending)
+        print(f"初稿: {draft}")
+        
+        # 审查流程
+        latest_text = draft
+        review_result: Optional[ReviewResult] = None
+        for round_idx in range(self.max_review_rounds):
+            print(f"\n>>> 审查第 {round_idx + 1} 轮...")
+            review_result = _review_post(llm, latest_text, topic, self.notes)
+            print(json.dumps(review_result.dict(), ensure_ascii=False, indent=2))
+            latest_text = review_result.final_text or latest_text
+            if review_result.approved:
+                break
+        
+        # 构建帖子数据
+        post_data = {
+            "topic": topic,
+            "draft": draft,
+            "final": latest_text,
+            "review": review_result.dict() if review_result else {},
+            "posted": False,
+        }
+        
+        # 发帖（如果auto_post=True）
+        if self.auto_post:
+            print("\n>>> 发帖...")
+            action_payload = {
+                "agent_id": context.agent_id,
+                "action_type": "post",
+                "action_content": latest_text,
+                "target_object": None,
+            }
+            action_resp_raw = action_tool.invoke(action_payload)
+            print(f"后台响应：{action_resp_raw}")
+            
+            # 解析weibo_id
+            weibo_id: Optional[str] = None
+            try:
+                parsed = json.loads(action_resp_raw)
+                data = parsed.get("data")
+                if data:
+                    weibo_id = str(data)
+                    post_data["posted"] = True
+                    post_data["weibo_id"] = weibo_id
+            except json.JSONDecodeError:
+                pass
+            
+            # 获取反馈
+            if weibo_id and self.feedback_delay > 0:
+                time.sleep(self.feedback_delay)
+                try:
+                    feedback_raw = feedback_tool.invoke(
+                        {"agent_id": context.agent_id, "weibo_id": weibo_id}
+                    )
+                    feedback_data = json.loads(feedback_raw)
+                    post_data["feedback"] = feedback_data
+                    print(f"互动反馈：{json.dumps(feedback_data, ensure_ascii=False, indent=2)}")
+                except Exception as exc:  # noqa: BLE001
+                    print(f"获取反馈失败：{exc}")
+        
+        # 更新context
+        return context.add_post(post_data)
 
 
 def run_post_review_workflow(
