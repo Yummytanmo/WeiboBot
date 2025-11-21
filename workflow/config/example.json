@@ -1,0 +1,16 @@
+{
+  "workflow": "daily_agent",
+  "agent_id": "7828522614",
+  "llm_model": "gpt-4o-mini",
+  "llm_temperature": 0.3,
+  "tool_timeout": 600,
+  "current_post_topic": "AI 动态",
+  "current_post_notes": "补充说明示例",
+  "max_review_rounds": 2,
+  "auto_post": true,
+  "min_slots": 3,
+  "max_slots": 5,
+  "start_time": "09:00",
+  "end_time": "22:00",
+  "max_interactions": 4
+}

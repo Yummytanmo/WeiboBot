@@ -7,7 +7,7 @@ from contextlib import redirect_stdout
 from datetime import datetime
 from enum import Enum
 from io import StringIO
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
@@ -106,6 +106,23 @@ class WorkflowRun(BaseModel):
         arbitrary_types_allowed = True
 
 
+ICON_MAP = {
+    "fetch_feed": "📥",
+    "summarize_trending": "📊",
+    "generate_schedule": "📅",
+    "compose": "✍️",
+    "compose_post": "✍️",
+    "review": "👁️",
+    "review_post": "👁️",
+    "post": "🚀",
+    "post_weibo": "🚀",
+    "decide": "🤔",
+    "decide_interactions": "🤔",
+    "execute": "💬",
+    "execute_interactions": "💬",
+}
+
+
 # 存储workflow运行记录
 _runs: Dict[str, WorkflowRun] = {}
 _runs_lock = threading.Lock()
@@ -128,6 +145,105 @@ def _get_workflow_graph(workflow_type: WorkflowType):
         raise HTTPException(status_code=400, detail=f"未知的workflow类型: {workflow_type}")
     
     return creator()
+
+
+def _massage_node(node_id: Any, data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """构造前端节点描述"""
+    text_id = str(node_id)
+    label = (data or {}).get("label") or (data or {}).get("name") or text_id.replace("_", " ").title()
+    return {
+        "id": text_id,
+        "label": label,
+        "icon": ICON_MAP.get(text_id),
+    }
+
+
+def _extract_graph_structure(graph) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    从LangGraph编译后的graph中提取节点/边结构。
+    仅依赖通用的 get_graph() 方法，尽量不假定内部实现。
+    """
+    nodes: List[Dict[str, Any]] = []
+    edges: List[Dict[str, Any]] = []
+
+    # 优先使用 get_graph() 提供的 networkx 图
+    if hasattr(graph, "get_graph"):
+        nx_graph = graph.get_graph()
+        # 提取节点
+        try:
+            node_view = getattr(nx_graph, "nodes", None)
+            node_iter = node_view(data=True) if callable(node_view) else getattr(node_view, "data", lambda data=True: [])(data=True)
+            for node_id, data in list(node_iter):
+                node_data = data if isinstance(data, dict) else {}
+                nodes.append(_massage_node(node_id, node_data))
+        except Exception:
+            pass
+        # 提取边
+        try:
+            is_multi = callable(getattr(nx_graph, "is_multigraph", None)) and nx_graph.is_multigraph()
+            edge_view = getattr(nx_graph, "edges", None)
+            edge_iter = (
+                edge_view(keys=True, data=True) if (callable(edge_view) and is_multi) else
+                edge_view(data=True) if callable(edge_view) else
+                getattr(edge_view, "data", lambda data=True: [])(data=True)
+            )
+            for edge in list(edge_iter):
+                try:
+                    if is_multi:
+                        source, target, _key, attr = edge
+                    else:
+                        source, target, attr = edge
+                except Exception:
+                    continue
+                label = None
+                if isinstance(attr, dict):
+                    label = attr.get("label") or attr.get("condition") or attr.get("name")
+                edges.append({
+                    "id": f"{source}->{target}-{len(edges)}",
+                    "source": str(source),
+                    "target": str(target),
+                    "label": label,
+                })
+        except Exception:
+            pass
+
+    # 如果未成功获取，尝试 fallback（空）
+    if not nodes:
+        return [], []
+    return nodes, edges
+
+
+def _get_workflow_graph_layout(workflow_type: WorkflowType) -> Dict[str, Any]:
+    """
+    获取workflow的节点和边布局。
+    优先从LangGraph真实结构提取，无法提取时返回空节点/边，
+    由前端执行自动布局。
+    """
+    try:
+        graph = _get_workflow_graph(workflow_type)
+        nodes, edges = _extract_graph_structure(graph)
+        if nodes:
+            return {"nodes": nodes, "edges": edges}
+    except Exception as exc:
+        # 捕获但不阻断，让前端有机会使用简易fallback
+        print(f"⚠️ 无法提取workflow图结构: {exc}")
+
+    # fallback：仅提供基本信息（前端会自动布局）
+    fallbacks = {
+        WorkflowType.DAILY_SCHEDULE: ["fetch_feed", "summarize_trending", "generate_schedule"],
+        WorkflowType.POST_REVIEW: ["compose", "review", "post"],
+        WorkflowType.BROWSE_INTERACTION: ["fetch_feed", "decide", "execute"],
+        WorkflowType.DAILY_AGENT: [
+            "fetch_feed", "summarize_trending", "generate_schedule",
+            "compose_post", "review_post", "post_weibo",
+            "decide_interactions", "execute_interactions",
+        ],
+    }
+    node_ids = fallbacks.get(workflow_type, [])
+    return {
+        "nodes": [_massage_node(node_id) for node_id in node_ids],
+        "edges": [],
+    }
 
 
 def _build_initial_state(request: WorkflowRequest) -> Dict[str, Any]:
@@ -191,6 +307,12 @@ async def root():
         "service": "Workflow Frontend API",
         "langgraph_available": LANGGRAPH_AVAILABLE,
     }
+
+
+@app.get("/graph/{workflow_type}")
+async def get_workflow_graph_layout(workflow_type: WorkflowType):
+    """获取workflow的节点和边布局"""
+    return _get_workflow_graph_layout(workflow_type)
 
 
 @app.post("/trigger")
