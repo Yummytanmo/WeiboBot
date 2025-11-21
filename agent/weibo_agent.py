@@ -14,9 +14,7 @@ if __package__ in (None, ""):
     PARENT_DIR = os.path.dirname(CURRENT_DIR)
     if PARENT_DIR not in sys.path:
         sys.path.append(PARENT_DIR)
-    from weibo_service.langchain_tools import WeiboServiceToolkit  # type: ignore
-else:
-    from .langchain_tools import WeiboServiceToolkit
+from agent.weibo_tools import WeiboServiceToolkit  # noqa: E402
 
 SYSTEM_PROMPT = """你是“微博行动官”，也是一名关注 AI 科研与产业发展的科技博主。编写内容时保持专业、理性、积极向上的信息风格。任何时候都要遵循以下流程：
 
@@ -160,9 +158,6 @@ def run_langchain_cli(
 
 
 if __name__ == "__main__":
-    if __package__ in (None, ""):
-        from weibo_service.accounts import account_list  # type: ignore
-    else:
-        from .accounts import account_list
+    from weibo_service.accounts import account_list  # type: ignore
 
     run_langchain_cli(account_list)

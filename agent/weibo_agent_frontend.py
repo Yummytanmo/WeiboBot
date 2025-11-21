@@ -21,11 +21,8 @@ if __package__ in (None, ""):
     PARENT_DIR = CURRENT_DIR.parent
     if str(PARENT_DIR) not in sys.path:
         sys.path.append(str(PARENT_DIR))
-    from weibo_service.accounts import account_list  # type: ignore
-    from weibo_service.langchain_agent import create_weibo_langchain_agent  # type: ignore
-else:
-    from .accounts import account_list
-    from .langchain_agent import create_weibo_langchain_agent
+from agent.weibo_agent import create_weibo_langchain_agent  # noqa: E402
+from weibo_service.accounts import account_list  # type: ignore  # noqa: E402
 
 
 class SessionConfig(BaseModel):
@@ -86,9 +83,9 @@ class AgentSession:
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-FRONTEND_FILE = STATIC_DIR / "langchain_agent.html"
+FRONTEND_FILE = STATIC_DIR / "weibo_agent.html"
 
-app = FastAPI(title="Weibo LangChain Agent UI", version="0.1.0")
+app = FastAPI(title="Weibo Agent UI", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -244,7 +241,7 @@ def index() -> HTMLResponse:
     if not FRONTEND_FILE.exists():
         raise HTTPException(
             status_code=500,
-            detail="未找到前端页面，请确认 weibo_service/static/langchain_agent.html 已生成。",
+            detail="未找到前端页面，请确认 agent/static/weibo_agent.html 已生成。",
         )
     return HTMLResponse(FRONTEND_FILE.read_text(encoding="utf-8"))
 

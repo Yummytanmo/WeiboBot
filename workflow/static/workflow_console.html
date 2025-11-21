@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Workflow 控制台 · 微博行动官</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: linear-gradient(135deg, #eef2ff 0%, #f7f9fc 40%, #ffffff 100%);
+        --card: #ffffff;
+        --border: #e4e8f0;
+        --primary: #5563f0;
+        --primary-strong: #3b45d4;
+        --text: #1c2333;
+        --muted: #5f6677;
+        --shadow: 0 18px 45px rgba(17, 24, 39, 0.08);
+        --radius: 18px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "SF Pro Display", "Inter", "PingFang SC", system-ui, -apple-system, sans-serif;
+      }
+
+      .app {
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: 32px 18px 64px;
+      }
+
+      header {
+        display: flex;
+        justify-content: space-between;
+        gap: 16px;
+        align-items: flex-start;
+        margin-bottom: 20px;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 30px;
+        letter-spacing: -0.02em;
+      }
+
+      header p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 15px;
+        max-width: 760px;
+      }
+
+      .status {
+        text-align: right;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 14px;
+        border-radius: 999px;
+        background: rgba(85, 99, 240, 0.12);
+        color: var(--primary-strong);
+        font-weight: 700;
+        font-size: 14px;
+      }
+
+      .badge::before {
+        content: "";
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--primary-strong);
+        box-shadow: 0 0 0 8px rgba(85, 99, 240, 0.12);
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: 420px 1fr;
+        gap: 20px;
+      }
+
+      .panel {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+        padding: 20px 20px 24px;
+      }
+
+      .panel h2 {
+        margin: 0 0 6px;
+        font-size: 18px;
+      }
+
+      .panel p.desc {
+        margin: 0 0 18px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 14px;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--text);
+      }
+
+      label span {
+        display: block;
+        margin-bottom: 6px;
+        color: var(--muted);
+        font-weight: 500;
+      }
+
+      input,
+      select,
+      textarea {
+        width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 10px 12px;
+        font-size: 15px;
+        background: #fff;
+      }
+
+      textarea {
+        resize: vertical;
+        min-height: 90px;
+      }
+
+      .workflow-tabs {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+        margin: 6px 0 16px;
+      }
+
+      .tab {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 12px;
+        background: #f7f8ff;
+        cursor: pointer;
+        font-weight: 700;
+        color: var(--muted);
+        transition: all 0.18s ease;
+      }
+
+      .tab.active {
+        background: linear-gradient(120deg, rgba(85, 99, 240, 0.14), rgba(85, 99, 240, 0.06));
+        color: var(--primary-strong);
+        border-color: rgba(85, 99, 240, 0.3);
+        box-shadow: 0 8px 24px rgba(85, 99, 240, 0.2);
+      }
+
+      .form {
+        display: none;
+      }
+
+      .form.active {
+        display: block;
+      }
+
+      .actions {
+        display: flex;
+        gap: 12px;
+        margin-top: 4px;
+        flex-wrap: wrap;
+      }
+
+      button {
+        border: none;
+        cursor: pointer;
+        border-radius: 12px;
+        padding: 12px 18px;
+        font-weight: 700;
+        font-size: 15px;
+        transition: all 0.2s ease;
+      }
+
+      .primary {
+        background: var(--primary);
+        color: #fff;
+        box-shadow: 0 8px 22px rgba(85, 99, 240, 0.35);
+      }
+
+      .primary:hover {
+        background: var(--primary-strong);
+      }
+
+      .secondary {
+        background: #f1f4fb;
+        color: var(--muted);
+      }
+
+      .status-board {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+
+      .pill {
+        background: #f6f7fb;
+        border: 1px dashed var(--border);
+        border-radius: 14px;
+        padding: 12px 14px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      pre,
+      .code-block {
+        background: #f9fafc;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 14px;
+        font-family: "SF Mono", "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
+        font-size: 13px;
+        color: #1e293b;
+        overflow: auto;
+        max-height: 420px;
+        white-space: pre-wrap;
+      }
+
+      .log-title {
+        margin: 0 0 6px;
+        font-size: 15px;
+        color: var(--muted);
+        font-weight: 700;
+      }
+
+      .history-list {
+        display: grid;
+        gap: 12px;
+        margin-top: 8px;
+      }
+
+      .history-item {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 12px;
+        background: #fdfdff;
+      }
+
+      .history-item h4 {
+        margin: 0 0 6px;
+      }
+
+      .history-meta {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      @media (max-width: 1080px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <header>
+        <div>
+          <h1>Workflow 控制台</h1>
+          <p>一键执行既定流程（浏览互动 / 发帖审查 / 日程代办），观察运行日志与返回数据，便于复用与回归测试。</p>
+        </div>
+        <div class="status">
+          <div class="badge" id="status-badge">待机</div>
+          <div class="history-meta" id="status-detail">尚未启动任何流程</div>
+        </div>
+      </header>
+
+      <div class="grid">
+        <section class="panel">
+          <h2>选择流程与参数</h2>
+          <p class="desc">先选账号，再切换到需要的 workflow，填入参数后运行。默认值与 Python 代码保持一致。</p>
+
+          <label>
+            <span>账号 ID</span>
+            <select id="agent-select"></select>
+          </label>
+
+          <div class="workflow-tabs">
+            <div class="tab active" data-key="browse">浏览互动</div>
+            <div class="tab" data-key="post_review">发帖审查</div>
+            <div class="tab" data-key="daily">日程工作流</div>
+          </div>
+
+          <form id="browse-form" class="form active" data-workflow="browse">
+            <label>
+              <span>模型</span>
+              <input type="text" id="browse-model" />
+            </label>
+            <label>
+              <span>关注流 / 推荐流条数</span>
+              <div style="display:flex; gap:10px;">
+                <input type="number" id="browse-following" min="1" />
+                <input type="number" id="browse-recommend" min="1" />
+              </div>
+            </label>
+            <label>
+              <span>最大执行动作数</span>
+              <input type="number" id="browse-max-actions" min="1" />
+            </label>
+            <label>
+              <span>工具超时（秒）</span>
+              <input type="number" id="browse-timeout" min="60" step="30" />
+            </label>
+            <div class="actions">
+              <button class="primary" type="submit">运行浏览互动</button>
+              <button class="secondary" type="button" data-reset="browse">恢复默认</button>
+            </div>
+          </form>
+
+          <form id="post-review-form" class="form" data-workflow="post_review">
+            <label>
+              <span>发帖主题</span>
+              <input type="text" id="post-topic" placeholder="必填，例如：AI 安全解读" />
+            </label>
+            <label>
+              <span>补充说明（选填）</span>
+              <textarea id="post-notes" placeholder="素材来源、想要的角度"></textarea>
+            </label>
+            <label>
+              <span>热点摘要（选填）</span>
+              <textarea id="post-trending" placeholder="可直接粘贴热点 JSON 或简述"></textarea>
+            </label>
+            <label>
+              <span>模型</span>
+              <input type="text" id="post-model" />
+            </label>
+            <label>
+              <span>审核轮数上限 / 反馈等待秒数</span>
+              <div style="display:flex; gap:10px;">
+                <input type="number" id="post-max-rounds" min="1" />
+                <input type="number" id="post-feedback-delay" min="0" />
+              </div>
+            </label>
+            <label>
+              <span>工具超时（秒）</span>
+              <input type="number" id="post-timeout" min="60" step="30" />
+            </label>
+            <div class="actions">
+              <button class="primary" type="submit">运行发帖审查</button>
+              <button class="secondary" type="button" data-reset="post_review">恢复默认</button>
+            </div>
+          </form>
+
+          <form id="daily-form" class="form" data-workflow="daily">
+            <label>
+              <span>模型</span>
+              <input type="text" id="daily-model" />
+            </label>
+            <label>
+              <span>最少 / 最多时间槽</span>
+              <div style="display:flex; gap:10px;">
+                <input type="number" id="daily-min-slots" min="1" />
+                <input type="number" id="daily-max-slots" min="1" />
+              </div>
+            </label>
+            <label>
+              <span>关注流 / 推荐流条数</span>
+              <div style="display:flex; gap:10px;">
+                <input type="number" id="daily-following" min="1" />
+                <input type="number" id="daily-recommend" min="1" />
+              </div>
+            </label>
+            <label>
+              <span>工具超时（秒）</span>
+              <input type="number" id="daily-timeout" min="60" step="30" />
+            </label>
+            <div class="actions">
+              <button class="primary" type="submit">运行日程工作流</button>
+              <button class="secondary" type="button" data-reset="daily">恢复默认</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel">
+          <h2>运行状态</h2>
+          <p class="desc">轮询查看当前 run 的状态、print 日志与返回结果。结果为 Python 函数原样返回的 dict。</p>
+
+          <div class="status-board">
+            <div class="pill">当前 run：<strong id="run-id">-</strong></div>
+            <div class="pill">状态：<strong id="run-status">未开始</strong></div>
+            <div class="pill">开始时间：<strong id="run-start">-</strong></div>
+            <div class="pill">结束时间：<strong id="run-end">-</strong></div>
+          </div>
+
+          <div class="log-section">
+            <p class="log-title">运行日志（print 捕获）</p>
+            <pre id="run-logs">暂无日志</pre>
+          </div>
+
+          <div class="log-section" style="margin-top:14px;">
+            <p class="log-title">返回结果</p>
+            <div class="code-block" id="run-result">暂无结果</div>
+          </div>
+        </section>
+
+        <section class="panel" style="grid-column: 1 / -1;">
+          <h2>最近的运行</h2>
+          <p class="desc">展示最近 20 次触发的 workflow，便于回顾参数、时间与状态。</p>
+          <div id="history" class="history-list"></div>
+        </section>
+      </div>
+    </div>
+
+    <script>
+      const state = {
+        active: "browse",
+        defaults: {},
+        polling: null,
+        runId: null,
+      };
+
+      const refs = {
+        agent: document.getElementById("agent-select"),
+        statusBadge: document.getElementById("status-badge"),
+        statusDetail: document.getElementById("status-detail"),
+        runId: document.getElementById("run-id"),
+        runStatus: document.getElementById("run-status"),
+        runStart: document.getElementById("run-start"),
+        runEnd: document.getElementById("run-end"),
+        runLogs: document.getElementById("run-logs"),
+        runResult: document.getElementById("run-result"),
+        history: document.getElementById("history"),
+      };
+
+      function setStatus(label, detail) {
+        refs.statusBadge.textContent = label;
+        refs.statusDetail.textContent = detail || "";
+      }
+
+      function switchTab(key) {
+        state.active = key;
+        document.querySelectorAll(".tab").forEach((tab) => {
+          tab.classList.toggle("active", tab.dataset.key === key);
+        });
+        document.querySelectorAll(".form").forEach((form) => {
+          form.classList.toggle("active", form.dataset.workflow === key);
+        });
+        setDefaults(key);
+      }
+
+      function setDefaults(key) {
+        const defaults = state.defaults[key] || {};
+        if (key === "browse") {
+          document.getElementById("browse-model").value = defaults.model ?? "";
+          document.getElementById("browse-following").value = defaults.n_following ?? "";
+          document.getElementById("browse-recommend").value = defaults.n_recommend ?? "";
+          document.getElementById("browse-max-actions").value = defaults.max_actions ?? "";
+          document.getElementById("browse-timeout").value = defaults.tool_timeout ?? "";
+        } else if (key === "post_review") {
+          document.getElementById("post-model").value = defaults.model ?? "";
+          document.getElementById("post-max-rounds").value = defaults.max_review_rounds ?? "";
+          document.getElementById("post-feedback-delay").value = defaults.feedback_delay ?? "";
+          document.getElementById("post-timeout").value = defaults.tool_timeout ?? "";
+        } else if (key === "daily") {
+          document.getElementById("daily-model").value = defaults.model ?? "";
+          document.getElementById("daily-min-slots").value = defaults.min_slots ?? "";
+          document.getElementById("daily-max-slots").value = defaults.max_slots ?? "";
+          document.getElementById("daily-following").value = defaults.n_following ?? "";
+          document.getElementById("daily-recommend").value = defaults.n_recommend ?? "";
+          document.getElementById("daily-timeout").value = defaults.tool_timeout ?? "";
+        }
+      }
+
+      async function fetchConfig() {
+        try {
+          const res = await fetch("/api/workflows/config");
+          if (!res.ok) throw new Error(await res.text());
+          const data = await res.json();
+          state.defaults = data.defaults || {};
+
+          const accounts = data.accounts || [];
+          refs.agent.innerHTML = accounts.length
+            ? accounts.map((acct) => `<option value="${acct.account_id}">${acct.account_id}</option>`).join("")
+            : '<option value="">暂无账号</option>';
+          setDefaults(state.active);
+          renderHistory();
+        } catch (err) {
+          console.error(err);
+          setStatus("获取配置失败", "请检查后端是否启动");
+        }
+      }
+
+      function gatherPayload() {
+        const toNumber = (id) => {
+          const raw = document.getElementById(id).value.trim();
+          return raw === "" ? undefined : Number(raw);
+        };
+        const toText = (id) => document.getElementById(id).value.trim();
+
+        const payload = { workflow: state.active, agent_id: refs.agent.value };
+        if (state.active === "browse") {
+          payload.model = toText("browse-model") || undefined;
+          payload.n_following = toNumber("browse-following");
+          payload.n_recommend = toNumber("browse-recommend");
+          payload.max_actions = toNumber("browse-max-actions");
+          payload.tool_timeout = toNumber("browse-timeout");
+        } else if (state.active === "post_review") {
+          payload.topic = toText("post-topic");
+          payload.notes = toText("post-notes") || undefined;
+          payload.trending = toText("post-trending") || undefined;
+          payload.model = toText("post-model") || undefined;
+          payload.max_review_rounds = toNumber("post-max-rounds");
+          payload.feedback_delay = toNumber("post-feedback-delay");
+          payload.tool_timeout = toNumber("post-timeout");
+        } else {
+          payload.model = toText("daily-model") || undefined;
+          payload.min_slots = toNumber("daily-min-slots");
+          payload.max_slots = toNumber("daily-max-slots");
+          payload.n_following = toNumber("daily-following");
+          payload.n_recommend = toNumber("daily-recommend");
+          payload.tool_timeout = toNumber("daily-timeout");
+        }
+        return payload;
+      }
+
+      async function triggerRun(event) {
+        event.preventDefault();
+        const payload = gatherPayload();
+        if (!payload.agent_id) {
+          alert("请选择账号 ID");
+          return;
+        }
+        refs.runLogs.textContent = "等待中...";
+        refs.runResult.textContent = "等待中...";
+        setStatus("运行中", `正在执行 ${payload.workflow}...`);
+        try {
+          const res = await fetch("/api/workflows/run", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) throw new Error(await res.text());
+          const data = await res.json();
+          state.runId = data.run_id;
+          refs.runId.textContent = data.run_id;
+          refs.runStatus.textContent = data.status || "pending";
+          startPolling();
+        } catch (err) {
+          console.error(err);
+          setStatus("启动失败", err.message || "触发 workflow 失败");
+          refs.runLogs.textContent = err.message || "触发失败";
+        }
+      }
+
+      function startPolling() {
+        if (!state.runId) return;
+        if (state.polling) clearInterval(state.polling);
+        fetchRunStatus();
+        state.polling = setInterval(fetchRunStatus, 2500);
+      }
+
+      async function fetchRunStatus() {
+        if (!state.runId) return;
+        try {
+          const res = await fetch(`/api/workflows/run/${state.runId}`);
+          if (!res.ok) throw new Error(await res.text());
+          const data = await res.json();
+          refs.runStatus.textContent = data.status;
+          refs.runStart.textContent = data.started_at || "-";
+          refs.runEnd.textContent = data.finished_at || "-";
+          refs.runLogs.textContent = data.logs || "暂无日志";
+          refs.runResult.textContent = data.result
+            ? JSON.stringify(data.result, null, 2)
+            : data.error || "暂无结果";
+
+          if (data.status === "success") {
+            setStatus("运行完成", "已成功执行 workflow");
+            clearInterval(state.polling);
+            renderHistory();
+          } else if (data.status === "error") {
+            setStatus("运行失败", data.error || "请查看日志");
+            clearInterval(state.polling);
+            renderHistory();
+          } else {
+            setStatus("运行中", `状态：${data.status}`);
+          }
+        } catch (err) {
+          console.error(err);
+          setStatus("获取状态失败", err.message || "");
+        }
+      }
+
+      async function renderHistory() {
+        try {
+          const res = await fetch("/api/workflows");
+          if (!res.ok) throw new Error(await res.text());
+          const data = await res.json();
+          const runs = data.runs || [];
+          if (!runs.length) {
+            refs.history.innerHTML = '<div class="history-meta">暂无运行记录</div>';
+            return;
+          }
+          refs.history.innerHTML = runs
+            .map(
+              (run) => `
+                <div class="history-item">
+                  <h4>${run.workflow} · ${run.status}</h4>
+                  <div class="history-meta">
+                    <div>ID：${run.id}</div>
+                    <div>开始：${run.started_at || "-"} · 结束：${run.finished_at || "-"}</div>
+                  </div>
+                </div>
+              `
+            )
+            .join("");
+        } catch (err) {
+          console.error(err);
+          refs.history.innerHTML = '<div class="history-meta">无法获取历史记录</div>';
+        }
+      }
+
+      document.querySelectorAll(".tab").forEach((tab) => {
+        tab.addEventListener("click", () => switchTab(tab.dataset.key));
+      });
+
+      document.querySelectorAll("form").forEach((form) => {
+        form.addEventListener("submit", triggerRun);
+      });
+
+      document.querySelectorAll("button[data-reset]").forEach((btn) => {
+        btn.addEventListener("click", () => setDefaults(btn.dataset.reset));
+      });
+
+      fetchConfig();
+      setStatus("待机", "尚未启动任何流程");
+    </script>
+  </body>
+</html>

@@ -1,5 +1,8 @@
+import logging
 import os
 import sys
+import time
+from logging.handlers import RotatingFileHandler
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -14,6 +17,44 @@ if __package__ in (None, ""):
     from WeiboBots import WeiboBots  # type: ignore
 else:
     from .WeiboBots import WeiboBots
+
+
+def _setup_logger() -> logging.Logger:
+    """
+    Configure a shared logger for backend runtime and request tracing.
+
+    - File path can be overridden by WEIBO_BACKEND_LOG (default: ./weibo_backend.log).
+    - Level can be overridden by WEIBO_BACKEND_LOG_LEVEL (default: INFO).
+    """
+    logger = logging.getLogger("weibo_service.backend")
+    if logger.handlers:
+        return logger
+
+    level_name = os.getenv("WEIBO_BACKEND_LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    logger.setLevel(level)
+
+    log_path = os.getenv("WEIBO_BACKEND_LOG", os.path.join(os.getcwd(), "weibo_backend.log"))
+    formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+    )
+
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
+
+    try:
+        file_handler = RotatingFileHandler(log_path, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8")
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+    except OSError as exc:
+        logger.warning("日志文件创建失败，fallback 到控制台日志: %s", exc)
+
+    logger.propagate = False
+    return logger
+
+
+LOGGER = _setup_logger()
 
 
 def _normalize_agent_id(agent_id: Any) -> Any:
@@ -58,6 +99,7 @@ def create_app(account_list: List[Dict[str, Any]]) -> FastAPI:
         raise ValueError("account_list cannot be empty.")
 
     bots = WeiboBots(account_list)
+    LOGGER.info("Backend initialized with %d accounts: %s", len(account_list), [acct["account_id"] for acct in account_list])
 
     app = FastAPI(title="Weibo Service Backend", version="1.0.0")
     app.add_middleware(
@@ -68,6 +110,21 @@ def create_app(account_list: List[Dict[str, Any]]) -> FastAPI:
         allow_headers=["*"],
     )
 
+    @app.middleware("http")
+    async def log_requests(request, call_next):
+        start = time.perf_counter()
+        status_code = 500
+        try:
+            response = await call_next(request)
+            status_code = response.status_code
+            return response
+        except Exception as exc:
+            LOGGER.exception("Request failed: %s %s -> %s", request.method, request.url.path, exc)
+            raise
+        finally:
+            duration_ms = (time.perf_counter() - start) * 1000
+            LOGGER.info("HTTP %s %s -> %s (%.1f ms)", request.method, request.url.path, status_code, duration_ms)
+
     @app.get("/health")
     def health():
         return {"status": "ok", "accounts": [acct["account_id"] for acct in account_list]}
@@ -76,6 +133,7 @@ def create_app(account_list: List[Dict[str, Any]]) -> FastAPI:
     def get_state(payload: StatePayload):
         try:
             agent_id = _normalize_agent_id(payload.agent_id)
+            LOGGER.info("Get state agent_id=%s following=%s recommend=%s", agent_id, payload.n_following, payload.n_recommend)
             result = bots.get_state(
                 agent_id,
                 n_following=payload.n_following,
@@ -83,10 +141,12 @@ def create_app(account_list: List[Dict[str, Any]]) -> FastAPI:
             )
             if result is None:
                 raise HTTPException(status_code=404, detail="无法获取动态")
+            LOGGER.debug("State result keys: %s", list(result.keys()))
             return {"success": True, "data": result}
         except HTTPException:
             raise
         except Exception as exc:
+            LOGGER.exception("Get state failed for agent_id=%s", payload.agent_id)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.post("/action")
@@ -99,15 +159,18 @@ def create_app(account_list: List[Dict[str, Any]]) -> FastAPI:
             "object": payload.target_object,
         }
         try:
+            LOGGER.info("Do action %s", action)
             result = bots.update_state(action)
             return {"success": bool(result), "data": result, "action": action}
         except Exception as exc:
+            LOGGER.exception("Action failed: %s", action)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.post("/feedback")
     def get_feedback(payload: FeedbackPayload):
         try:
             agent_id = _normalize_agent_id(payload.agent_id)
+            LOGGER.info("Get feedback agent_id=%s weibo_id=%s", agent_id, payload.weibo_id)
             result = bots.get_feedback(agent_id, weibo_id=payload.weibo_id)
             if result is None:
                 raise HTTPException(status_code=404, detail="未获取到反馈")
@@ -115,11 +178,13 @@ def create_app(account_list: List[Dict[str, Any]]) -> FastAPI:
         except HTTPException:
             raise
         except Exception as exc:
+            LOGGER.exception("Get feedback failed agent_id=%s weibo_id=%s", payload.agent_id, payload.weibo_id)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     @app.post("/record")
     def get_record(payload: RecordPayload):
         try:
+            LOGGER.info("Get record object_id=%s", payload.object_id)
             result = bots.get_record(payload.object_id)
             if result is None:
                 raise HTTPException(status_code=404, detail="未找到微博")
@@ -127,6 +192,7 @@ def create_app(account_list: List[Dict[str, Any]]) -> FastAPI:
         except HTTPException:
             raise
         except Exception as exc:
+            LOGGER.exception("Get record failed object_id=%s", payload.object_id)
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return app
