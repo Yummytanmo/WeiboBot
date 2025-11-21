@@ -7,10 +7,9 @@ import {
     Typography,
     List,
     ListItem,
-    ListItemText,
     ListItemButton,
+    ListItemText,
     Chip,
-    IconButton,
     Button,
     Dialog,
     DialogTitle,
@@ -22,46 +21,42 @@ import {
     FormControl,
     InputLabel,
     CircularProgress,
-    Divider,
-    Tabs,
-    Tab
+    IconButton,
 } from '@mui/material';
 import {
     Add as AddIcon,
     Refresh as RefreshIcon,
-    CheckCircle as CheckCircleIcon,
-    Error as ErrorIcon,
-    Schedule as ScheduleIcon,
-    PlayArrow as PlayArrowIcon
+    Delete as DeleteIcon,
 } from '@mui/icons-material';
-import ContextViewer from '../components/ContextViewer';
-import WorkflowChainDisplay from '../components/WorkflowChainDisplay';
+import WorkflowGraphViewer from '../components/workflow/WorkflowGraphViewer';
 
 const API_BASE = 'http://localhost:8000/api/workflow';
 
 const WorkflowPage = () => {
     const [runs, setRuns] = useState([]);
     const [selectedRun, setSelectedRun] = useState(null);
-    const [config, setConfig] = useState(null);
     const [loading, setLoading] = useState(false);
     const [triggerModalOpen, setTriggerModalOpen] = useState(false);
-    const [activeTab, setActiveTab] = useState(0); // 0=Details, 1=Context
 
     const [formData, setFormData] = useState({
-        workflow: 'browse',
-        agent_id: '',
-        model: '',
+        workflow: 'daily_schedule',
+        agent_id: '7828522614',  // 默认账号ID
+        llm_model: 'gpt-4o-mini',
+        current_post_topic: '',
+        max_review_rounds: 2,
+        min_slots: 3,
+        max_slots: 5,
     });
 
     useEffect(() => {
         fetchRuns();
-        fetchConfig();
-        const interval = setInterval(fetchRuns, 5000);
+        const interval = setInterval(fetchRuns, 3000);
         return () => clearInterval(interval);
     }, []);
 
+    // 当选中的run状态改变时，自动更新
     useEffect(() => {
-        if (selectedRun && selectedRun.status === 'running') {
+        if (selectedRun?.status === 'running') {
             const interval = setInterval(() => fetchRunDetails(selectedRun.id), 2000);
             return () => clearInterval(interval);
         }
@@ -69,347 +64,249 @@ const WorkflowPage = () => {
 
     const fetchRuns = async () => {
         try {
-            const res = await axios.get(`${API_BASE}/api/workflows`);
-            setRuns(res.data.runs);
+            const res = await axios.get(`${API_BASE}/runs`);
+            setRuns(res.data.runs || []);
         } catch (err) {
             console.error('Failed to fetch runs', err);
         }
     };
 
-    const fetchConfig = async () => {
-        try {
-            const res = await axios.get(`${API_BASE}/api/workflows/config`);
-            setConfig(res.data);
-            if (res.data.accounts.length > 0) {
-                setFormData(prev => ({ ...prev, agent_id: res.data.accounts[0].account_id }));
-            }
-        } catch (err) {
-            console.error('Failed to fetch config', err);
-        }
-    };
-
     const fetchRunDetails = async (runId) => {
         try {
-            const res = await axios.get(`${API_BASE}/api/workflows/run/${runId}`);
+            const res = await axios.get(`${API_BASE}/run/${runId}`);
             setSelectedRun(res.data);
+
+            // 更新列表中的run
+            setRuns(prev => prev.map(run =>
+                run.id === runId ? { ...run, status: res.data.status } : run
+            ));
         } catch (err) {
             console.error('Failed to fetch run details', err);
         }
     };
 
     const triggerWorkflow = async () => {
-        if (!formData.agent_id) {
-            alert('Please select an Agent Account.');
-            return;
-        }
-
+        setLoading(true);
         try {
-            setLoading(true);
-            const payload = { ...formData };
-            // Ensure agent_id is a string
-            if (payload.agent_id) {
-                payload.agent_id = String(payload.agent_id);
-            }
-
-            Object.keys(payload).forEach(key => {
-                if (payload[key] === '' || payload[key] === null) delete payload[key];
-            });
-
-            const res = await axios.post(`${API_BASE}/api/workflows/run`, payload);
+            const res = await axios.post(`${API_BASE}/trigger`, formData);
             setTriggerModalOpen(false);
             fetchRuns();
-            fetchRunDetails(res.data.run_id);
+            // 自动选中新创建的run
+            setTimeout(() => fetchRunDetails(res.data.run_id), 500);
         } catch (err) {
             console.error('Failed to trigger workflow', err);
-            let errorMessage = err.message;
-            if (err.response?.data?.detail) {
-                if (Array.isArray(err.response.data.detail)) {
-                    errorMessage = err.response.data.detail
-                        .map(e => `${e.loc.join('.')}: ${e.msg}`)
-                        .join('\n');
-                } else {
-                    errorMessage = err.response.data.detail;
-                }
-            }
-            alert('Failed to trigger workflow:\n' + errorMessage);
+            alert('Failed to trigger workflow: ' + (err.response?.data?.detail || err.message));
         } finally {
             setLoading(false);
         }
     };
 
-    const getStatusChip = (status) => {
-        switch (status) {
-            case 'success': return <Chip icon={<CheckCircleIcon />} label="Success" color="success" size="small" />;
-            case 'error': return <Chip icon={<ErrorIcon />} label="Error" color="error" size="small" />;
-            case 'running': return <Chip icon={<CircularProgress size={16} />} label="Running" color="primary" size="small" />;
-            default: return <Chip icon={<ScheduleIcon />} label={status} size="small" />;
+    const deleteRun = async (runId) => {
+        try {
+            await axios.delete(`${API_BASE}/run/${runId}`);
+            setRuns(prev => prev.filter(run => run.id !== runId));
+            if (selectedRun?.id === runId) {
+                setSelectedRun(null);
+            }
+        } catch (err) {
+            console.error('Failed to delete run', err);
         }
     };
 
+    const getStatusColor = (status) => {
+        const colors = {
+            pending: 'default',
+            running: 'primary',
+            completed: 'success',
+            failed: 'error',
+        };
+        return colors[status] || 'default';
+    };
+
     return (
-        <Box sx={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
-            {/* Sidebar List */}
-            <Paper sx={{ width: 300, display: 'flex', flexDirection: 'column', borderRadius: 0, borderRight: 1, borderColor: 'divider' }}>
-                <Box sx={{ p: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: 1, borderColor: 'divider' }}>
-                    <Typography variant="subtitle1" fontWeight="bold">Recent Runs</Typography>
-                    <IconButton color="primary" onClick={() => setTriggerModalOpen(true)}>
-                        <AddIcon />
-                    </IconButton>
+        <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                <Typography variant="h4">Workflows</Typography>
+                <Box>
+                    <Button
+                        variant="outlined"
+                        startIcon={<RefreshIcon />}
+                        onClick={fetchRuns}
+                        sx={{ mr: 1 }}
+                    >
+                        Refresh
+                    </Button>
+                    <Button
+                        variant="contained"
+                        startIcon={<AddIcon />}
+                        onClick={() => setTriggerModalOpen(true)}
+                    >
+                        New Workflow
+                    </Button>
                 </Box>
-                <List sx={{ flexGrow: 1, overflowY: 'auto' }}>
-                    {runs.map(run => (
-                        <ListItem key={run.id} disablePadding>
-                            <ListItemButton
-                                selected={selectedRun?.id === run.id}
-                                onClick={() => fetchRunDetails(run.id)}
-                                sx={{ flexDirection: 'column', alignItems: 'flex-start', gap: 1 }}
-                            >
-                                <Box sx={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                                    <Typography variant="body2" fontWeight="bold">{run.workflow}</Typography>
-                                    {getStatusChip(run.status)}
-                                </Box>
-                                <Typography variant="caption" color="text.secondary" fontFamily="monospace">
-                                    {run.id.slice(0, 8)}...
-                                </Typography>
-                                <Typography variant="caption" color="text.secondary">
-                                    {new Date(run.created_at).toLocaleString()}
-                                </Typography>
-                            </ListItemButton>
-                        </ListItem>
-                    ))}
-                </List>
-            </Paper>
+            </Box>
 
-            {/* Main Details Area */}
-            <Box sx={{ flexGrow: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', p: 3 }}>
-                {selectedRun ? (
-                    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 3 }}>
-                        <Paper sx={{ p: 3 }}>
-                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 2 }}>
-                                {getStatusChip(selectedRun.status)}
-                                <Typography variant="h5" fontWeight="bold">{selectedRun.workflow}</Typography>
-                                <Chip label={selectedRun.id} variant="outlined" size="small" sx={{ fontFamily: 'monosp ace' }} />
-                            </Box>
-
-                            {/* Workflow Chain */}
-                            {selectedRun.workflow_chain && (
-                                <WorkflowChainDisplay workflowChain={selectedRun.workflow_chain} />
-                            )}
-
-                            {selectedRun.status === 'running' && selectedRun.current_step && (
-                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, bgcolor: 'primary.dark', p: 2, borderRadius: 1, color: 'primary.contrastText' }}>
-                                    <CircularProgress size={20} color="inherit" />
-                                    <Typography variant="body1" fontWeight="bold">
-                                        {selectedRun.current_step}...
-                                    </Typography>
-                                </Box>
-                            )}
-                            <Grid container spacing={2}>
-                                <Grid item xs={4}>
-                                    <Typography variant="caption" color="text.secondary">Created</Typography>
-                                    <Typography variant="body2">{new Date(selectedRun.created_at).toLocaleString()}</Typography>
-                                </Grid>
-                                <Grid item xs={4}>
-                                    <Typography variant="caption" color="text.secondary">Started</Typography>
-                                    <Typography variant="body2">{selectedRun.started_at ? new Date(selectedRun.started_at).toLocaleString() : '-'}</Typography>
-                                </Grid>
-                                <Grid item xs={4}>
-                                    <Typography variant="caption" color="text.secondary">Finished</Typography>
-                                    <Typography variant="body2">{selectedRun.finished_at ? new Date(selectedRun.finished_at).toLocaleString() : '-'}</Typography>
-                                </Grid>
-                            </Grid>
-                        </Paper>
-
-                        {/* Tabs */}
-                        <Paper>
-                            <Tabs value={activeTab} onChange={(e, newValue) => setActiveTab(newValue)}>
-                                <Tab label="Details & Logs" />
-                                <Tab label="Context Data" disabled={!selectedRun.context_data} />
-                            </Tabs>
-                        </Paper>
-
-                        {activeTab === 0 && (
-                            <Box sx={{ flexGrow: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
-                                <Paper sx={{ p: 2 }}>
-                                    <Typography variant="subtitle2" gutterBottom>Parameters</Typography>
-                                    <Box sx={{ bgcolor: 'background.default', p: 2, borderRadius: 1, overflowX: 'auto' }}>
-                                        <Typography variant="caption" fontFamily="monospace" component="pre">
-                                            {JSON.stringify(selectedRun.params, null, 2)}
-                                        </Typography>
-                                    </Box>
-                                </Paper>
-
-                                {selectedRun.error && (
-                                    <Paper sx={{ p: 2, bgcolor: 'error.dark', color: 'error.contrastText' }}>
-                                        <Typography variant="subtitle2" gutterBottom>Error</Typography>
-                                        <Typography variant="body2" fontFamily="monospace" component="pre" sx={{ whiteSpace: 'pre-wrap' }}>
-                                            {selectedRun.error}
-                                        </Typography>
-                                    </Paper>
-                                )}
-
-                                {selectedRun.result && (
-                                    <Paper sx={{ p: 2, bgcolor: 'success.dark', color: 'success.contrastText' }}>
-                                        <Typography variant="subtitle2" gutterBottom>Result</Typography>
-                                        <Typography variant="body2" fontFamily="monospace" component="pre" sx={{ whiteSpace: 'pre-wrap' }}>
-                                            {typeof selectedRun.result === 'string' ? selectedRun.result : JSON.stringify(selectedRun.result, null, 2)}
-                                        </Typography>
-                                    </Paper>
-                                )}
-
-                                <Paper sx={{ p: 2, flexGrow: 1, display: 'flex', flexDirection: 'column' }}>
-                                    <Typography variant="subtitle2" gutterBottom>Logs</Typography>
-                                    <Box sx={{ bgcolor: 'black', color: 'grey.300', p: 2, borderRadius: 1, flexGrow: 1, overflowY: 'auto', minHeight: 200 }}>
-                                        <Typography variant="caption" fontFamily="monospace" component="pre" sx={{ whiteSpace: 'pre-wrap' }}>
-                                            {selectedRun.logs || 'No logs available.'}
-                                        </Typography>
-                                    </Box>
-                                </Paper>
-                            </Box>
-                        )}
-
-                        {activeTab === 1 && selectedRun.context_data && (
-                            <Box sx={{ flexGrow: 1, overflowY: 'auto' }}>
-                                <ContextViewer contextData={selectedRun.context_data} />
-                            </Box>
-                        )}
-                    </Box>
-                ) : (
-                    <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'text.secondary' }}>
-                        <PlayArrowIcon sx={{ fontSize: 60, opacity: 0.2, mb: 2 }} />
-                        <Typography variant="h6">Select a run to view details</Typography>
-                    </Box>
-                )
-                }
-            </Box >
-
-            {/* Trigger Modal */}
-            < Dialog open={triggerModalOpen} onClose={() => setTriggerModalOpen(false)} maxWidth="sm" fullWidth >
-                <DialogTitle>Start New Workflow</DialogTitle>
-                <DialogContent>
-                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3, mt: 1 }}>
-                        <FormControl fullWidth>
-                            <InputLabel>Workflow Type</InputLabel>
-                            <Select
-                                value={formData.workflow}
-                                label="Workflow Type"
-                                onChange={(e) => setFormData({ ...formData, workflow: e.target.value })}
-                            >
-                                <MenuItem value="browse">Browse Interaction</MenuItem>
-                                <MenuItem value="post_review">Post Review</MenuItem>
-                                <MenuItem value="daily">Daily Agent</MenuItem>
-                                <Divider />
-                                <MenuItem value="schedule_post">🔗 Schedule → Post</MenuItem>
-                                <MenuItem value="schedule_browse">🔗 Schedule → Browse</MenuItem>
-                                <MenuItem value="full_chain">🔗 Full Chain (Schedule → Post → Browse)</MenuItem>
-                            </Select>
-                        </FormControl>
-
-                        <FormControl fullWidth>
-                            <InputLabel>Agent Account</InputLabel>
-                            <Select
-                                value={formData.agent_id}
-                                label="Agent Account"
-                                onChange={(e) => setFormData({ ...formData, agent_id: e.target.value })}
-                            >
-                                {config?.accounts?.map(acc => (
-                                    <MenuItem key={acc.account_id} value={acc.account_id}>{acc.account_id}</MenuItem>
-                                ))}
-                            </Select>
-                        </FormControl>
-
-                        {formData.workflow === 'post_review' && (
-                            <>
-                                <TextField
-                                    label="Topic"
-                                    fullWidth
-                                    value={formData.topic || ''}
-                                    onChange={(e) => setFormData({ ...formData, topic: e.target.value })}
-                                />
-                                <TextField
-                                    label="Notes"
-                                    fullWidth
-                                    multiline
-                                    rows={3}
-                                    value={formData.notes || ''}
-                                    onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                                />
-                            </>
-                        )}
-
-                        {(formData.workflow === 'browse' || formData.workflow === 'daily') && (
-                            <Box sx={{ display: 'flex', gap: 2 }}>
-                                <TextField
-                                    label="Following Count"
-                                    type="number"
-                                    fullWidth
-                                    value={formData.n_following || ''}
-                                    onChange={(e) => setFormData({ ...formData, n_following: parseInt(e.target.value) || '' })}
-                                />
-                                <TextField
-                                    label="Recommend Count"
-                                    type="number"
-                                    fullWidth
-                                    value={formData.n_recommend || ''}
-                                    onChange={(e) => setFormData({ ...formData, n_recommend: parseInt(e.target.value) || '' })}
-                                />
-                            </Box>
-                        )}
-
-                        {formData.workflow === 'daily' && (
-                            <>
-                                <Typography variant="subtitle2" color="primary" sx={{ mt: 1 }}>
-                                    ⏰ Time Scheduling Options
-                                </Typography>
-                                <Box sx={{ display: 'flex', gap: 2 }}>
-                                    <TextField
-                                        label="Check Interval (seconds)"
-                                        type="number"
-                                        fullWidth
-                                        placeholder="60"
-                                        value={formData.check_interval || ''}
-                                        onChange={(e) => setFormData({ ...formData, check_interval: parseInt(e.target.value) || '' })}
-                                        helperText="How often to check for tasks"
+            <Grid container spacing={2} sx={{ flexGrow: 1, overflow: 'hidden' }}>
+                {/* 左侧：Workflow列表 */}
+                <Grid item xs={12} md={4}>
+                    <Paper sx={{ height: '100%', overflow: 'auto', p: 2 }}>
+                        <Typography variant="h6" gutterBottom>Workflow Runs</Typography>
+                        <List>
+                            {runs.length === 0 && (
+                                <ListItem>
+                                    <ListItemText
+                                        primary="No workflows yet"
+                                        secondary="Click 'New Workflow' to start"
                                     />
-                                    <TextField
-                                        label="Time Tolerance (minutes)"
-                                        type="number"
-                                        fullWidth
-                                        placeholder="5"
-                                        value={formData.tolerance_minutes || ''}
-                                        onChange={(e) => setFormData({ ...formData, tolerance_minutes: parseInt(e.target.value) || '' })}
-                                        helperText="Time window for execution"
-                                    />
-                                </Box>
-                                <FormControl component="fieldset">
-                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                                        <input
-                                            type="checkbox"
-                                            checked={formData.run_once || false}
-                                            onChange={(e) => setFormData({ ...formData, run_once: e.target.checked })}
+                                </ListItem>
+                            )}
+                            {runs.map((run) => (
+                                <ListItem
+                                    key={run.id}
+                                    disablePadding
+                                    secondaryAction={
+                                        <IconButton edge="end" onClick={() => deleteRun(run.id)}>
+                                            <DeleteIcon />
+                                        </IconButton>
+                                    }
+                                >
+                                    <ListItemButton
+                                        selected={selectedRun?.id === run.id}
+                                        onClick={() => fetchRunDetails(run.id)}
+                                    >
+                                        <ListItemText
+                                            primary={
+                                                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                                    <Typography variant="body1">
+                                                        {run.workflow.replace(/_/g, ' ')}
+                                                    </Typography>
+                                                    <Chip
+                                                        label={run.status}
+                                                        color={getStatusColor(run.status)}
+                                                        size="small"
+                                                    />
+                                                </Box>
+                                            }
+                                            secondary={new Date(run.created_at).toLocaleString()}
                                         />
-                                        <Typography variant="body2">
-                                            Run Once (execute only current time tasks and exit)
-                                        </Typography>
+                                    </ListItemButton>
+                                </ListItem>
+                            ))}
+                        </List>
+                    </Paper>
+                </Grid>
+
+                {/* 右侧：详情和可视化 */}
+                <Grid item xs={12} md={8}>
+                    {!selectedRun ? (
+                        <Paper sx={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', p: 4 }}>
+                            <Typography variant="h6" color="text.secondary">
+                                Select a workflow to view details
+                            </Typography>
+                        </Paper>
+                    ) : (
+                        <Paper sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+                            {/* 头部信息 */}
+                            <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
+                                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                                    <Typography variant="h6">
+                                        {selectedRun.workflow.replace(/_/g, ' ')}
+                                    </Typography>
+                                    <Chip label={selectedRun.status} color={getStatusColor(selectedRun.status)} />
+                                </Box>
+                                <Typography variant="caption" color="text.secondary">
+                                    ID: {selectedRun.id}
+                                </Typography>
+                                {selectedRun.current_node && (
+                                    <Typography variant="body2" color="primary" sx={{ mt: 1 }}>
+                                        Current: {selectedRun.current_node}
+                                    </Typography>
+                                )}
+                            </Box>
+
+                            {/* 可视化图 */}
+                            <Box sx={{ flexGrow: 1, minHeight: 300 }}>
+                                <WorkflowGraphViewer
+                                    workflowType={selectedRun.workflow}
+                                    currentNode={selectedRun.current_node}
+                                    nodeStatuses={selectedRun.nodes || []}
+                                />
+                            </Box>
+
+                            {/* 日志和结果 */}
+                            <Box sx={{ p: 2, borderTop: 1, borderColor: 'divider', maxHeight: 200, overflow: 'auto' }}>
+                                <Typography variant="subtitle2" gutterBottom>Logs</Typography>
+                                <pre style={{ fontSize: '0.8em', margin: 0, whiteSpace: 'pre-wrap' }}>
+                                    {selectedRun.logs || 'No logs yet...'}
+                                </pre>
+                                {selectedRun.error && (
+                                    <Box sx={{ mt: 2, p: 1, bgcolor: 'error.light', borderRadius: 1 }}>
+                                        <Typography variant="subtitle2" color="error.dark">Error:</Typography>
+                                        <Typography variant="body2" color="error.dark">{selectedRun.error}</Typography>
                                     </Box>
-                                </FormControl>
-                            </>
-                        )}
-                    </Box>
+                                )}
+                            </Box>
+                        </Paper>
+                    )}
+                </Grid>
+            </Grid>
+
+            {/* 触发Workflow对话框 */}
+            <Dialog open={triggerModalOpen} onClose={() => !loading && setTriggerModalOpen(false)} maxWidth="sm" fullWidth>
+                <DialogTitle>Trigger New Workflow</DialogTitle>
+                <DialogContent>
+                    <FormControl fullWidth sx={{ mt: 2 }}>
+                        <InputLabel>Workflow Type</InputLabel>
+                        <Select
+                            value={formData.workflow}
+                            onChange={(e) => setFormData({ ...formData, workflow: e.target.value })}
+                            label="Workflow Type"
+                        >
+                            <MenuItem value="daily_schedule">Daily Schedule</MenuItem>
+                            <MenuItem value="post_review">Post Review</MenuItem>
+                            <MenuItem value="browse_interaction">Browse Interaction</MenuItem>
+                            <MenuItem value="daily_agent">Daily Agent (Full)</MenuItem>
+                        </Select>
+                    </FormControl>
+
+
+                    <FormControl fullWidth sx={{ mt: 2 }}>
+                        <InputLabel>Agent ID</InputLabel>
+                        <Select
+                            value={formData.agent_id}
+                            onChange={(e) => setFormData({ ...formData, agent_id: e.target.value })}
+                            label="Agent ID"
+                        >
+                            <MenuItem value="7828522614">7828522614</MenuItem>
+                        </Select>
+                    </FormControl>
+
+
+                    {(formData.workflow === 'post_review' || formData.workflow === 'daily_agent') && (
+                        <TextField
+                            fullWidth
+                            label="Post Topic"
+                            value={formData.current_post_topic}
+                            onChange={(e) => setFormData({ ...formData, current_post_topic: e.target.value })}
+                            sx={{ mt: 2 }}
+                            placeholder="e.g., AI技术进展"
+                        />
+                    )}
                 </DialogContent>
                 <DialogActions>
-                    <Button onClick={() => setTriggerModalOpen(false)}>Cancel</Button>
+                    <Button onClick={() => setTriggerModalOpen(false)} disabled={loading}>
+                        Cancel
+                    </Button>
                     <Button
                         onClick={triggerWorkflow}
                         variant="contained"
-                        disabled={loading}
-                        startIcon={loading ? <CircularProgress size={20} /> : <PlayArrowIcon />}
+                        disabled={loading || !formData.agent_id}
                     >
-                        Start
+                        {loading ? <CircularProgress size={24} /> : 'Trigger'}
                     </Button>
                 </DialogActions>
-            </Dialog >
-        </Box >
+            </Dialog>
+        </Box>
     );
 };
 

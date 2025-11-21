@@ -19,7 +19,8 @@ import {
 import {
     Chat as ChatIcon,
     AccountTree as WorkflowIcon,
-    Dashboard as DashboardIcon
+    Dashboard as DashboardIcon,
+    Build as BuildIcon
 } from '@mui/icons-material';
 
 const drawerWidth = 240;
@@ -46,6 +47,7 @@ const Layout = ({ children }) => {
     const menuItems = [
         { text: 'Agent Chat', icon: <ChatIcon />, path: '/agent' },
         { text: 'Workflows', icon: <WorkflowIcon />, path: '/workflow' },
+        { text: 'Workflow Builder', icon: <BuildIcon />, path: '/workflow-builder' },
     ];
 
     return (

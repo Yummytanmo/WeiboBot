@@ -1,438 +1,263 @@
-import io
-import os
-import sys
+"""
+Workflow Frontend API - 基于LangGraph
+提供workflow执行和管理的HTTP接口
+"""
 import threading
 from contextlib import redirect_stdout
 from datetime import datetime
 from enum import Enum
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from io import StringIO
+from typing import Dict, List, Optional, Any
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel
 
-if __package__ in (None, ""):
-    CURRENT_DIR = Path(__file__).resolve().parent
-    PARENT_DIR = CURRENT_DIR.parent
-    if str(PARENT_DIR) not in sys.path:
-        sys.path.append(str(PARENT_DIR))
-    from workflow.browse_interaction_workflow import (  # type: ignore  # noqa: E402
-        run_browse_interaction_workflow,
-        BrowseInteractionWorkflow,
-    )
-    from workflow.daily_agent_workflow import run_daily_workflow  # type: ignore  # noqa: E402
-    from workflow.daily_schedule_workflow import DailyScheduleWorkflow  # type: ignore  # noqa: E402
-    from workflow.post_review_workflow import run_post_review_workflow, PostReviewWorkflow  # type: ignore  # noqa: E402
-    from workflow.workflow_base import WorkflowContext, run_chain  # type: ignore  # noqa: E402
-    from weibo_service.accounts import account_list  # type: ignore  # noqa: E402
-else:
-    from .browse_interaction_workflow import run_browse_interaction_workflow, BrowseInteractionWorkflow
-    from .daily_agent_workflow import run_daily_workflow
-    from .daily_schedule_workflow import DailyScheduleWorkflow
-    from .post_review_workflow import run_post_review_workflow, PostReviewWorkflow
-    from .workflow_base import WorkflowContext, run_chain
-    from weibo_service.accounts import account_list  # type: ignore
+# 导入LangGraph workflow系统
+from workflow import (
+    create_daily_schedule_graph,
+    create_post_review_graph,
+    create_browse_interaction_graph,
+    create_daily_agent_graph,
+    run_graph,
+    LANGGRAPH_AVAILABLE,
+)
 
+app = FastAPI(title="Workflow Frontend API")
 
-class WorkflowType(str, Enum):
-    BROWSE = "browse"
-    POST_REVIEW = "post_review"
-    DAILY = "daily"
-    # 组合workflow
-    SCHEDULE_POST = "schedule_post"
-    SCHEDULE_BROWSE = "schedule_browse"
-    FULL_CHAIN = "full_chain"
-
-
-WORKFLOW_DEFAULTS = {
-    WorkflowType.BROWSE: {
-        "model": "gpt-5",
-        "n_following": 5,
-        "n_recommend": 5,
-        "max_actions": 5,
-        "tool_timeout": 600,
-    },
-    WorkflowType.POST_REVIEW: {
-        "model": "gpt-4o-mini",
-        "tool_timeout": 600,
-        "feedback_delay": 5,
-        "max_review_rounds": 2,
-    },
-    WorkflowType.DAILY: {
-        "model": "gpt-4o-mini",
-        "min_slots": 3,
-        "max_slots": 5,
-        "n_following": 4,
-        "n_recommend": 4,
-        "tool_timeout": 600,
-    },
-}
-
-
-class WorkflowRequest(BaseModel):
-    workflow: WorkflowType = Field(..., description="workflow 类型")
-    agent_id: str = Field(..., description="账号 ID")
-    model: Optional[str] = Field(None, description="可选模型名，留空使用默认值")
-    topic: Optional[str] = Field(None, description="post_review: 发帖主题")
-    notes: Optional[str] = Field(None, description="post_review: 补充说明")
-    trending: Optional[str] = Field(None, description="post_review: 热点摘要")
-    feedback_delay: Optional[int] = Field(None, description="post_review: 拉取反馈前的等待秒数")
-    max_review_rounds: Optional[int] = Field(None, description="post_review: 审核轮数上限")
-    n_following: Optional[int] = Field(None, description="browse/daily: 关注流条数")
-    n_recommend: Optional[int] = Field(None, description="browse/daily: 推荐流条数")
-    max_actions: Optional[int] = Field(None, description="browse: 最大执行动作数")
-    min_slots: Optional[int] = Field(None, description="daily: 最少时间槽")
-    max_slots: Optional[int] = Field(None, description="daily: 最多时间槽")
-    # Daily Agent时间调度参数
-    run_once: Optional[bool] = Field(None, description="daily: 只执行一次当前时间点的任务")
-    check_interval: Optional[int] = Field(None, description="daily: 检查间隔（秒）")
-    tolerance_minutes: Optional[int] = Field(None, description="daily: 时间容差（分钟）")
-    tool_timeout: Optional[float] = Field(None, description="工具调用超时时间（秒）")
-
-    @validator(
-        "feedback_delay",
-        "max_review_rounds",
-        "n_following",
-        "n_recommend",
-        "max_actions",
-        "min_slots",
-        "max_slots",
-        "check_interval",
-        "tolerance_minutes",
-        pre=True,
-    )
-    def _empty_to_none(cls, value: Optional[Any]) -> Optional[int]:
-        if value is None:
-            return None
-        if isinstance(value, str) and not value.strip():
-            return None
-        try:
-            return int(value)
-        except (TypeError, ValueError) as exc:  # noqa: BLE001
-            raise ValueError("数值字段必须为整数") from exc
-
-    @validator("tool_timeout", pre=True)
-    def _normalize_timeout(cls, value: Optional[Any]) -> Optional[float]:
-        if value is None:
-            return None
-        if isinstance(value, str) and not value.strip():
-            return None
-        try:
-            return float(value)
-        except (TypeError, ValueError) as exc:  # noqa: BLE001
-            raise ValueError("tool_timeout 必须为数字") from exc
-
-    @validator("topic")
-    def _topic_required(cls, value: Optional[str], values: Dict[str, Any]) -> Optional[str]:
-        if values.get("workflow") == WorkflowType.POST_REVIEW and not (value and value.strip()):
-            raise ValueError("post_review workflow 需要 topic。")
-        return value
-
-
-class WorkflowRun:
-    def __init__(self, run_id: str, workflow: WorkflowType, params: Dict[str, Any]):
-        self.id = run_id
-        self.workflow = workflow
-        self.params = params
-        self.status = "pending"
-        self.created_at = datetime.utcnow()
-        self.started_at: Optional[datetime] = None
-        self.finished_at: Optional[datetime] = None
-        self.logs = ""
-        self.result: Optional[Any] = None
-        self.error: Optional[str] = None
-        self.current_step: Optional[str] = None
-        self.context_data: Optional[Dict[str, Any]] = None  # 存储WorkflowContext数据
-        self.workflow_chain: Optional[List[str]] = None  # workflow组合链
-        self._log_lock = threading.Lock()
-
-    def append_log(self, text: str):
-        with self._log_lock:
-            self.logs += text
-
-    def set_step(self, step: str):
-        self.current_step = step
-
-    def to_dict(self, brief: bool = False) -> Dict[str, Any]:
-        data = {
-            "id": self.id,
-            "workflow": self.workflow.value,
-            "status": self.status,
-            "params": self.params,
-            "created_at": self.created_at.isoformat() + "Z",
-            "started_at": self.started_at.isoformat() + "Z" if self.started_at else None,
-            "finished_at": self.finished_at.isoformat() + "Z" if self.finished_at else None,
-            "workflow_chain": self.workflow_chain,
-        }
-        if not brief:
-            with self._log_lock:
-                data["logs"] = self.logs
-            data["result"] = self.result
-            data["error"] = self.error
-            data["current_step"] = self.current_step
-            data["context_data"] = self.context_data
-        return data
-
-
-STATIC_DIR = Path(__file__).resolve().parent / "static"
-FRONTEND_FILE = STATIC_DIR / "workflow_console.html"
-
-app = FastAPI(title="Workflow UI", version="0.1.0")
+# CORS配置
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-if STATIC_DIR.exists():
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+class WorkflowType(str, Enum):
+    """Workflow类型枚举"""
+    DAILY_SCHEDULE = "daily_schedule"
+    POST_REVIEW = "post_review"
+    BROWSE_INTERACTION = "browse_interaction"
+    DAILY_AGENT = "daily_agent"
+
+
+class WorkflowRequest(BaseModel):
+    """Workflow执行请求"""
+    workflow: WorkflowType
+    agent_id: str
+    # 通用参数
+    llm_model: str = "gpt-4o-mini"
+    llm_temperature: float = 0.3
+    tool_timeout: float = 600.0
+    # Post相关
+    current_post_topic: Optional[str] = None
+    current_post_notes: Optional[str] = None
+    max_review_rounds: int = 2
+    auto_post: bool = True
+    # Schedule相关
+    min_slots: int = 3
+    max_slots: int = 5
+    start_time: str = "09:00"
+    end_time: str = "22:00"
+    # Browse相关
+    max_interactions: int = 5
+
+
+class WorkflowStatus(str, Enum):
+    """Workflow状态"""
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class NodeStatus(BaseModel):
+    """节点执行状态"""
+    id: str
+    label: str
+    status: WorkflowStatus
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    duration: Optional[float] = None
+    error: Optional[str] = None
+
+
+class WorkflowRun(BaseModel):
+    """Workflow执行记录"""
+    id: str
+    workflow: WorkflowType
+    status: WorkflowStatus
+    params: Dict[str, Any]
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None
+    logs: str = ""
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+    current_node: Optional[str] = None
+    # 执行图数据
+    nodes: List[NodeStatus] = []
+    edges: List[Dict[str, str]] = []
+    
+    class Config:
+        arbitrary_types_allowed = True
+
+
+# 存储workflow运行记录
 _runs: Dict[str, WorkflowRun] = {}
 _runs_lock = threading.Lock()
 
 
-def _default_value(workflow: WorkflowType, key: str) -> Any:
-    defaults = WORKFLOW_DEFAULTS.get(workflow, {})
-    return defaults.get(key)
-
-
-import logging
-
-class LogStream:
-    def __init__(self, run: WorkflowRun):
-        self.run = run
-
-    def write(self, text: str):
-        self.run.append_log(text)
-        # Parse step from logs (lines starting with >>>)
-        if text.strip().startswith(">>>"):
-            step = text.strip().replace(">>>", "").strip()
-            self.run.set_step(step)
-        # Also parse weibo_service logs for steps
-        elif "weibo_service.backend" in text and "Do action" in text:
-             self.run.set_step("执行动作...")
-        elif "weibo_service.backend" in text and "Get state" in text:
-             self.run.set_step("获取状态...")
-        elif "weibo_service.backend" in text and "Get feedback" in text:
-             self.run.set_step("获取互动反馈...")
-        elif "weibo_service.backend" in text and "浏览微博" in text:
-             self.run.set_step("浏览微博...")
-        
-        sys.__stdout__.write(text)  # Also print to real stdout for debugging
-
-    def flush(self):
-        sys.__stdout__.flush()
-
-
-class StreamHandler(logging.Handler):
-    def __init__(self, stream):
-        super().__init__()
-        self.stream = stream
-
-    def emit(self, record):
-        try:
-            msg = self.format(record)
-            self.stream.write(msg + "\n")
-        except Exception:
-            self.handleError(record)
-
-
-import traceback
-
-def _execute_workflow(run: WorkflowRun, payload: WorkflowRequest) -> None:
-    run.started_at = datetime.utcnow()
-    run.status = "running"
-    log_stream = LogStream(run)
+def _get_workflow_graph(workflow_type: WorkflowType):
+    """根据类型获取workflow图"""
+    if not LANGGRAPH_AVAILABLE:
+        raise HTTPException(status_code=500, detail="LangGraph未安装，请运行: pip install langgraph")
     
-    # Setup logging capture
-    stream_handler = StreamHandler(log_stream)
-    formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s - %(message)s')
-    stream_handler.setFormatter(formatter)
+    graph_creators = {
+        WorkflowType.DAILY_SCHEDULE: create_daily_schedule_graph,
+        WorkflowType.POST_REVIEW: create_post_review_graph,
+        WorkflowType.BROWSE_INTERACTION: create_browse_interaction_graph,
+        WorkflowType.DAILY_AGENT: create_daily_agent_graph,
+    }
     
-    root_logger = logging.getLogger()
-    root_logger.addHandler(stream_handler)
+    creator = graph_creators.get(workflow_type)
+    if not creator:
+        raise HTTPException(status_code=400, detail=f"未知的workflow类型: {workflow_type}")
     
-    try:
-        with redirect_stdout(log_stream):
-            if payload.workflow == WorkflowType.BROWSE:
-                run.result = run_browse_interaction_workflow(
-                    agent_id=payload.agent_id,
-                    model=payload.model or _default_value(WorkflowType.BROWSE, "model"),
-                    n_following=payload.n_following or _default_value(WorkflowType.BROWSE, "n_following"),
-                    n_recommend=payload.n_recommend or _default_value(WorkflowType.BROWSE, "n_recommend"),
-                    max_actions=payload.max_actions or _default_value(WorkflowType.BROWSE, "max_actions"),
-                    tool_timeout=payload.tool_timeout or _default_value(WorkflowType.BROWSE, "tool_timeout"),
-                )
-            elif payload.workflow == WorkflowType.POST_REVIEW:
-                run.result = run_post_review_workflow(
-                    agent_id=payload.agent_id,
-                    topic=payload.topic or "",
-                    notes=payload.notes,
-                    trending=payload.trending,
-                    model=payload.model or _default_value(WorkflowType.POST_REVIEW, "model"),
-                    tool_timeout=payload.tool_timeout or _default_value(WorkflowType.POST_REVIEW, "tool_timeout"),
-                    feedback_delay=payload.feedback_delay
-                    if payload.feedback_delay is not None
-                    else _default_value(WorkflowType.POST_REVIEW, "feedback_delay"),
-                    max_review_rounds=payload.max_review_rounds
-                    or _default_value(WorkflowType.POST_REVIEW, "max_review_rounds"),
-                )
-            elif payload.workflow == WorkflowType.DAILY:
-                context = run_daily_workflow(
-                    agent_id=payload.agent_id,
-                    model=payload.model or _default_value(WorkflowType.DAILY, "model"),
-                    min_slots=payload.min_slots or _default_value(WorkflowType.DAILY, "min_slots"),
-                    max_slots=payload.max_slots or _default_value(WorkflowType.DAILY, "max_slots"),
-                    check_interval=payload.check_interval or 60,
-                    tolerance_minutes=payload.tolerance_minutes or 5,
-                    run_once=payload.run_once or False,
-                    tool_timeout=payload.tool_timeout or _default_value(WorkflowType.DAILY, "tool_timeout"),
-                )
-                # 存储context数据
-                run.context_data = context.dict()
-                run.result = {
-                    "schedule": context.schedule,
-                    "posts": context.posts,
-                    "interactions": context.interactions,
-                    "summary": f"Daily agent completed: {len(context.schedule.get('items', []))} schedule items, {len(context.posts)} posts, {len(context.interactions)} interactions"
-                }
-            # 组合workflow
-            elif payload.workflow == WorkflowType.SCHEDULE_POST:
-                run.workflow_chain = ["DailySchedule", "PostReview"]
-                run.set_step("准备执行workflow链：Schedule → Post")
-                chain = (
-                    DailyScheduleWorkflow(
-                        min_slots=payload.min_slots or 3,
-                        max_slots=payload.max_slots or 5,
-                    )
-                    | PostReviewWorkflow(auto_post=True)
-                )
-                context = run_chain(
-                    chain,
-                    agent_id=payload.agent_id,
-                    llm_model=payload.model or "gpt-4o-mini",
-                    tool_timeout=payload.tool_timeout or 600.0,
-                )
-                run.context_data = context.dict()
-                run.result = {
-                    "schedule": context.schedule,
-                    "posts": context.posts,
-                    "summary": f"Created {len(context.schedule.get('items', []))} schedule items, posted {len(context.posts)} posts"
-                }
-            elif payload.workflow == WorkflowType.SCHEDULE_BROWSE:
-                run.workflow_chain = ["DailySchedule", "BrowseInteraction"]
-                run.set_step("准备执行workflow链：Schedule → Browse")
-                chain = (
-                    DailyScheduleWorkflow(
-                        min_slots=payload.min_slots or 3,
-                        max_slots=payload.max_slots or 5,
-                    )
-                    | BrowseInteractionWorkflow(max_actions=payload.max_actions or 5)
-                )
-                context = run_chain(
-                    chain,
-                    agent_id=payload.agent_id,
-                    llm_model=payload.model or "gpt-4o-mini",
-                    tool_timeout=payload.tool_timeout or 600.0,
-                )
-                run.context_data = context.dict()
-                run.result = {
-                    "schedule": context.schedule,
-                    "interactions": context.interactions,
-                    "summary": f"Created {len(context.schedule.get('items', []))} schedule items, {len(context.interactions)} interactions"
-                }
-            elif payload.workflow == WorkflowType.FULL_CHAIN:
-                run.workflow_chain = ["DailySchedule", "PostReview", "BrowseInteraction"]
-                run.set_step("准备执行完整workflow链：Schedule → Post → Browse")
-                chain = (
-                    DailyScheduleWorkflow(
-                        min_slots=payload.min_slots or 3,
-                        max_slots=payload.max_slots or 5,
-                    )
-                    | PostReviewWorkflow(auto_post=True)
-                    | BrowseInteractionWorkflow(max_actions=payload.max_actions or 5)
-                )
-                context = run_chain(
-                    chain,
-                    agent_id=payload.agent_id,
-                    llm_model=payload.model or "gpt-4o-mini",
-                    tool_timeout=payload.tool_timeout or 600.0,
-                )
-                run.context_data = context.dict()
-                run.result = {
-                    "schedule": context.schedule,
-                    "posts": context.posts,
-                    "interactions": context.interactions,
-                    "summary": f"Full chain complete: {len(context.schedule.get('items', []))} schedule items, {len(context.posts)} posts, {len(context.interactions)} interactions"
-                }
-        run.status = "success"
-        if run.result is None:
-            run.result = {"message": "workflow 执行完成（无显式返回值）"}
-    except Exception as exc:  # noqa: BLE001
-        run.status = "error"
-        run.error = str(exc)
-        # Log the error as well
-        run.append_log(f"\nError: {str(exc)}\n")
-        run.append_log(f"Traceback:\n{traceback.format_exc()}\n")
-    finally:
-        run.finished_at = datetime.utcnow()
-        root_logger.removeHandler(stream_handler)
+    return creator()
 
 
-@app.get("/", response_class=HTMLResponse)
-def index() -> HTMLResponse:
-    if not FRONTEND_FILE.exists():
-        raise HTTPException(status_code=500, detail="未找到前端页面，请确认 workflow/static/workflow_console.html 已生成。")
-    return HTMLResponse(FRONTEND_FILE.read_text(encoding="utf-8"))
-
-
-@app.get("/api/workflows/config")
-def get_config():
-    sanitized_accounts = [{"account_id": acct.get("account_id")} for acct in account_list]
-    defaults = {key.value: value for key, value in WORKFLOW_DEFAULTS.items()}
+def _build_initial_state(request: WorkflowRequest) -> Dict[str, Any]:
+    """构建初始状态"""
     return {
-        "accounts": sanitized_accounts,
-        "defaults": defaults,
+        "agent_id": request.agent_id,
+        "llm_model": request.llm_model,
+        "llm_temperature": request.llm_temperature,
+        "tool_timeout": request.tool_timeout,
+        "current_post_topic": request.current_post_topic,
+        "current_post_notes": request.current_post_notes,
+        "max_review_rounds": request.max_review_rounds,
+        "auto_post": request.auto_post,
+        "min_slots": request.min_slots,
+        "max_slots": request.max_slots,
+        "start_time": request.start_time,
+        "end_time": request.end_time,
+        "max_interactions": request.max_interactions,
     }
 
 
-@app.post("/api/workflows/run")
-def trigger_workflow(payload: WorkflowRequest):
-    run_id = uuid4().hex
-    params = payload.dict()
-    run = WorkflowRun(run_id, payload.workflow, params)
+def _execute_workflow(run_id: str, request: WorkflowRequest):
+    """后台执行workflow"""
+    with _runs_lock:
+        run = _runs[run_id]
+        run.status = WorkflowStatus.RUNNING
+        run.started_at = datetime.utcnow()
+    
+    try:
+        # 获取workflow图
+        graph = _get_workflow_graph(request.workflow)
+        
+        # 构建初始状态
+        initial_state = _build_initial_state(request)
+        
+        # 捕获日志
+        log_stream = StringIO()
+        with redirect_stdout(log_stream):
+            # 执行workflow
+            final_state = run_graph(graph, initial_state)
+        
+        # 更新结果
+        with _runs_lock:
+            run.status = WorkflowStatus.COMPLETED
+            run.finished_at = datetime.utcnow()
+            run.logs = log_stream.getvalue()
+            run.result = final_state
+            run.current_node = final_state.get("current_node")
+    
+    except Exception as e:
+        with _runs_lock:
+            run.status = WorkflowStatus.FAILED
+            run.finished_at = datetime.utcnow()
+            run.error = str(e)
+
+
+@app.get("/")
+async def root():
+    """健康检查"""
+    return {
+        "service": "Workflow Frontend API",
+        "langgraph_available": LANGGRAPH_AVAILABLE,
+    }
+
+
+@app.post("/trigger")
+async def trigger_workflow(request: WorkflowRequest):
+    """触发workflow执行"""
+    # 创建运行记录
+    run_id = str(uuid4())
+    run = WorkflowRun(
+        id=run_id,
+        workflow=request.workflow,
+        status=WorkflowStatus.PENDING,
+        params=request.dict(),
+        created_at=datetime.utcnow(),
+    )
+    
     with _runs_lock:
         _runs[run_id] = run
-    thread = threading.Thread(target=_execute_workflow, args=(run, payload), daemon=True)
+    
+    # 后台执行
+    thread = threading.Thread(target=_execute_workflow, args=(run_id, request))
+    thread.daemon = True
     thread.start()
-    return {"run_id": run_id, "status": run.status}
+    
+    return {"run_id": run_id, "status": "triggered"}
 
 
-@app.get("/api/workflows/run/{run_id}")
-def get_run(run_id: str):
-    run = _runs.get(run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="run_id 不存在或已过期。")
-    return run.to_dict()
-
-
-@app.get("/api/workflows")
-def list_runs():
+@app.get("/runs")
+async def list_runs():
+    """获取所有运行记录"""
     with _runs_lock:
-        runs = list(_runs.values())
-    runs.sort(key=lambda x: x.created_at, reverse=True)
-    return {"runs": [r.to_dict(brief=True) for r in runs[:20]]}
+        return {
+            "runs": [
+                {
+                    "id": run.id,
+                    "workflow": run.workflow,
+                    "status": run.status,
+                    "created_at": run.created_at.isoformat(),
+                    "started_at": run.started_at.isoformat() if run.started_at else None,
+                    "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+                }
+                for run in _runs.values()
+            ]
+        }
+
+
+@app.get("/run/{run_id}")
+async def get_run(run_id: str):
+    """获取运行详情"""
+    with _runs_lock:
+        run = _runs.get(run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Run not found")
+        
+        return run.dict()
+
+
+@app.delete("/run/{run_id}")
+async def delete_run(run_id: str):
+    """删除运行记录"""
+    with _runs_lock:
+        if run_id not in _runs:
+            raise HTTPException(status_code=404, detail="Run not found")
+        del _runs[run_id]
+    
+    return {"status": "deleted"}
 
 
 if __name__ == "__main__":
     import uvicorn
-
-    host = os.getenv("WORKFLOW_UI_HOST", "127.0.0.1")
-    port = int(os.getenv("WORKFLOW_UI_PORT", "18081"))
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
